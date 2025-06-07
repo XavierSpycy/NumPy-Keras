@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "numpy-keras"
+version = "2.0.0"
+description = "A Multilayer Perceptron from scratch using NumPy. Offers almost all basic functionalities. Suitable for classification and regression tasks."
+authors = [{ name="Jiarui Xu", email="xujiarui98@foxmail.com" }]
+dependencies = [
+    "numpy==1.26.4"
+]
+
+[project.optional-dependencies]
+viz = [
+    "tqdm==4.66.1",
+    "matplotlib==3.8.2"
+]
+autograd = [
+    "autograd==1.7.0"
+]
+autograd-viz = [
+    "tqdm==4.66.1",
+    "matplotlib==3.8.2",
+    "autograd==1.7.0"
+]
+all = [
+    "tqdm==4.66.1",
+    "matplotlib==3.8.2",
+    "autograd==1.7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/XavierSpycy/NumPy-Keras"
