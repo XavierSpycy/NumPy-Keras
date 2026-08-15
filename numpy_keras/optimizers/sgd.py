@@ -3,6 +3,7 @@ from typing import List
 import numpy as np
 
 from ._base import Optimizer
+from ..cython import _kernels as _ck
 
 class SGD(Optimizer):
     """
@@ -51,6 +52,18 @@ class SGD(Optimizer):
         for i, layer in enumerate(layers):
             if hasattr(layer, 'params') and hasattr(layer, 'grads'):
                 for key in layer.params:
+                    # Optional Cython fast path: one fused pass per param array
+                    if (_ck is not None
+                            and layer.params[key].dtype == np.float64
+                            and layer.params[key].flags.c_contiguous
+                            and layer.grads[key].flags.c_contiguous
+                            and self.velocity[i][key].flags.c_contiguous):
+                        _ck.sgd_update(
+                            layer.params[key], layer.grads[key],
+                            self.velocity[i][key],
+                            self.learning_rate, self.momentum,
+                            self.weight_decay, int(self.nesterov))
+                        continue
                     # Get the gradient
                     grad = layer.grads[key]
                     # Add weight decay

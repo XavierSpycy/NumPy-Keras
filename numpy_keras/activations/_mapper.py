@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from . import functional as F
 
 class _ActivationMapper:
@@ -21,8 +23,13 @@ class _ActivationMapper:
         "softmax": F.softmax, 
     }
     
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def _lookup(name: str):
+        return _ActivationMapper.activations[name.lower()]
+
     def __getitem__(self, name: str):
-        if not name.lower() in self.activations:
+        try:
+            return self._lookup(name)
+        except KeyError:
             raise ValueError(f"Activation function {name} not found.")
-        else:
-            return self.activations[name.lower()]

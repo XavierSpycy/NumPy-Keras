@@ -19,6 +19,7 @@ from .. import (
     optimizers,
 )
 from ..activations._mapper import _ActivationMapper
+from ..cython import _kernels as _ck
 
 class Sequential:
     __idx2label = None
@@ -185,15 +186,21 @@ class Sequential:
                     break
             
             if epoch % validation_freq == 0:
-                y_pred_train = self.predict(
-                    X_train, 
-                    batch_size=validation_batch_size if validation_batch_size is not None else batch_size)
-                if X_test is not None:
-                    y_pred_test = self.predict(X_test, batch_size=validation_batch_size if validation_batch_size is not None else batch_size)
+                # Full-data predictions only feed the metric loop; without
+                # metrics the extra forward passes are pure waste.
+                if self.__metrics:
+                    y_pred_train = self.predict(
+                        X_train,
+                        batch_size=validation_batch_size if validation_batch_size is not None else batch_size)
+                    y_pred_test = self.predict(
+                        X_test,
+                        batch_size=validation_batch_size if validation_batch_size is not None else batch_size
+                    ) if X_test is not None else None
                 else:
+                    y_pred_train = None
                     y_pred_test = None
-                
-                if y_pred_test is not None:
+
+                if X_test is not None:
                     if not "val_loss" in self.__history.metrics:
                         self.__history.metrics["val_loss"] = []
                     self.__history.metrics["val_loss"].append(
@@ -266,7 +273,10 @@ class Sequential:
             batch_X = X[start_idx:end_idx]
             batch_output = self.__forward(batch_X, is_training=False)
             if self.__idx2label is not None:
-                batch_output = np.array([self.__idx2label[np.argmax(pred, axis=0)] for pred in batch_output])
+                if _ck is not None and batch_output.ndim == 2 and batch_output.dtype == np.float64:
+                    batch_output = np.array([self.__idx2label[i] for i in _ck.argmax_rows(batch_output)])
+                else:
+                    batch_output = np.array([self.__idx2label[np.argmax(pred, axis=0)] for pred in batch_output])
             elif batch_output.ndim == 2 and batch_output.shape[1] == 1:
                 batch_output = batch_output.flatten()
             outputs.append(batch_output)
@@ -315,22 +325,23 @@ class Sequential:
             y_hat: np.ndarray,
         ) -> Tuple[np.float64, np.ndarray]:
 
-        y_ = y.copy()
         if y.ndim == 1 and y_hat.ndim == 2:
-            y_ = y_.reshape(-1, 1)
-        loss = self.__loss_func(y_, y_hat)
-        grad = self.__loss_func.grad(y_, y_hat)
+            y = y.reshape(-1, 1)   # view; the loss functions only read y
+        loss = self.__loss_func(y, y_hat)
+        grad = self.__loss_func.grad(y, y_hat)
         # Chain through the activation of the last layer itself. Derivs are
         # defined on the post-activation value, so evaluate at y_hat. For
         # softmax the loss grad already includes the activation
         # (d softmax+CE / d logits), and no softmax_deriv exists.
-        last_layer = list(self.layers.values())[-1]
+        last_layer = next(reversed(self.layers.values()))
         if hasattr(last_layer, 'activation'):
             try:
                 activation_deriv = _ActivationMapper()[last_layer.activation + '_deriv']
             except ValueError:
                 activation_deriv = None
-            if activation_deriv is not None:
+            # linear_deriv is the constant 1; multiplying by it changes
+            # nothing (IEEE: x * 1 == x bit-exact)
+            if activation_deriv is not None and last_layer.activation != 'linear':
                 grad = grad * activation_deriv(y_hat, **last_layer.activation_config)
         return loss, grad
 
@@ -352,8 +363,9 @@ class Sequential:
             grad,
         ) -> None:
         
-        grad = list(self.layers.values())[-1].backward(grad)
-        for layer in reversed(list(self.layers.values())[:-1]):
+        reversed_layers = reversed(self.layers.values())
+        grad = next(reversed_layers).backward(grad)
+        for layer in reversed_layers:
             if not hasattr(layer, 'backward'):
                 continue
             grad = layer.backward(grad)
