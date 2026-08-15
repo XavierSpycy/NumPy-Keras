@@ -23,13 +23,13 @@ def hardsigmoid(x):
     return np.clip(x * 1/6 + 1/2, 0, 1)
 
 def hardsigmoid_deriv(a):
-    return np.where((a == 0) & (a == 1), 1/6, 0)
+    return np.where((a > 0) & (a < 1), 1/6, 0)
 
 def hardtanh(x, min_val=-1.0, max_val=1.0):
     return np.clip(x, min_val, max_val)
 
 def hardtanh_deriv(a, min_val=-1.0, max_val=1.0):
-    return np.where((a >= min_val) & (a <= max_val), 1, 0)
+    return np.where((a > min_val) & (a < max_val), 1, 0)
 
 def leaky_relu(x, alpha: float = 0.01):
     return np.where(x >= 0, x, alpha * x)
@@ -41,8 +41,7 @@ def log_sigmoid(x):
     return -np.log(1 + np.exp(-x))
 
 def log_sigmoid_deriv(a):
-    a_exp = np.exp(a)
-    return a_exp * (1 - a_exp)
+    return 1 - np.exp(a)
 
 def relu(x):
     return x * (x > 0)
@@ -54,7 +53,7 @@ def relu6(x):
     return np.clip(x, 0, 6)
 
 def relu6_deriv(a):
-    return np.where((a >= 0) & (a <= 6), 1, 0)
+    return np.where((a > 0) & (a < 6), 1, 0)
 
 def selu(x):
     alpha = 1.6732632423543772848170429916717
@@ -65,7 +64,7 @@ def selu(x):
 def selu_deriv(a):
     alpha = 1.6732632423543772848170429916717
     scale = 1.0507009873554804934193349852946
-    x = np.where(a > 0, a / scale, np.log(np.maximum(a / (scale * alpha), 1e-10) + 1))
+    x = np.where(a > 0, a / scale, np.log(np.maximum(a / (scale * alpha) + 1, 1e-10)))
     x = np.clip(x, -709, 709)
     return np.where(a > 0, scale, scale * alpha * np.exp(x))
 
@@ -73,9 +72,9 @@ def celu(x, alpha: float = 1.0):
     return np.where(x > 0, x, alpha * (np.exp(x / alpha) - 1))
 
 def celu_deriv(a, alpha: float = 1.0):
-    x = np.where(a > 0, 1, np.log(np.maximum((a + 1) / alpha, 1e-10) * alpha))
+    x = np.where(a > 0, 1, np.log(np.maximum((a + alpha) / alpha, 1e-10)))
     x = np.clip(x, -709, 709)
-    return np.where(a > 0, 1, alpha * np.exp(x))
+    return np.where(a > 0, 1, np.exp(x))
 
 def sigmoid(x):
     sigmoid = np.empty_like(x)
@@ -93,7 +92,7 @@ def softplus(x, beta: float = 1.0, threshold: float = 20.0):
     return np.where(x * beta > threshold, x, np.log(1 + np.exp(beta * x)) / beta)
 
 def softplus_deriv(a, beta: float = 1.0, threshold: float = 20.0):
-    return np.where(a > threshold, 1, 1 / (1 + np.exp(-beta * a)))
+    return np.where(a > threshold, 1, 1 - np.exp(-beta * a))
 
 def softshrink(x, lambd: float = 0.5):
     return np.where(x > lambd, x - lambd, np.where(x < -lambd, x + lambd, 0))
