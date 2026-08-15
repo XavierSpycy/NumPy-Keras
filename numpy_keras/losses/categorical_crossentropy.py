@@ -13,7 +13,8 @@ class CategoricalCrossEntropy:
             y_true: np.ndarray, 
             y_pred: np.ndarray,
         ) -> np.ndarray:
-        return -np.sum(y_true * np.log(y_pred)) / y_true.shape[0]
+        y_pred_clipped = np.clip(y_pred, 1e-10, 1 - 1e-10)
+        return -np.sum(y_true * np.log(y_pred_clipped)) / y_true.shape[0]
     
     def grad(
             self, 
@@ -22,4 +23,4 @@ class CategoricalCrossEntropy:
         ) -> np.ndarray:
 
         y_pred_clipped = np.clip(y_pred, 1e-10, 1 - 1e-10)
-        return y_pred_clipped - y_true
+        return (y_pred_clipped - y_true) / y_true.shape[0]
