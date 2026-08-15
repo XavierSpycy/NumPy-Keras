@@ -59,7 +59,7 @@ class Adadelta(Optimizer):
                     self.accum_grad_square[i][key] *= self.rho
                     self.accum_grad_square[i][key] += (1 - self.rho) * np.square(layer.grads[key])
                     # Calculate the delta
-                    delta = - np.sqrt(self.accum_delta_square[i][key] + self.epsilon) / np.sqrt(self.accum_grad_square[i][key] + self.epsilon) * layer.grads[key]
+                    delta = - np.sqrt(self.accum_delta_square[i][key] + self.epsilon) / np.sqrt(self.accum_grad_square[i][key] + self.epsilon) * grad
                     # Update the accum_delta_square
                     layer.params[key] += self.learning_rate * delta
                     # Update the accum_delta_square

@@ -129,7 +129,7 @@ class ConstantLR(LRScheduler):
         self.factor = factor
         self.total_iters = total_iters
         self.init_lr = None
-        self.constant_lr = self.init_lr * self.factor
+        self.constant_lr = None
         self.current_iters = 0
 
     def step(
@@ -145,6 +145,7 @@ class ConstantLR(LRScheduler):
 
         if self.init_lr is None:
             self.init_lr = model.optimizer.learning_rate
+            self.constant_lr = self.init_lr * self.factor
         self.current_iters += 1
         if self.current_iters < self.total_iters:
             model.optimizer.learning_rate = self.constant_lr
@@ -171,11 +172,12 @@ class LinearLR(LRScheduler):
         self.start_factor = start_factor
         self.end_factor = end_factor
         self.total_iters = total_iters
-    
+        self.current_iters = 0
+
     def step(
-            self, 
-            model, 
-            *args, 
+            self,
+            model,
+            *args,
             **kwargs,
         ) -> None:
 
@@ -183,15 +185,16 @@ class LinearLR(LRScheduler):
         Call this method after each iteration. This will update the learning rate if necessary.
         """
 
-        if self.current_iters < self.total_iters:
-            model.optimizer.learning_rate += self.linear_update
+        self.current_iters += 1
+        if self.current_iters <= self.total_iters:
+            model.optimizer.learning_rate = self.start_lr + self.linear_update * self.current_iters
         else:
-            model.optimizer.learning_rate *= self.end_factor
-    
+            model.optimizer.learning_rate = self.end_lr
+
     def on_train_begin(
-            self, 
-            model, 
-            *args, 
+            self,
+            model,
+            *args,
             **kwargs,
         ) -> None:
 
@@ -199,9 +202,11 @@ class LinearLR(LRScheduler):
         Call this method at the start of each epoch. This will reset the learning rate to the initial value.
         """
 
-        model.optimizer.learning_rate *= self.start_factor
         self.init_lr = model.optimizer.learning_rate
-        self.linear_update = (self.init_lr - self.init_lr * self.end_factor) / self.total_iters
+        self.start_lr = self.init_lr * self.start_factor
+        self.end_lr = self.init_lr * self.end_factor
+        self.linear_update = (self.end_lr - self.start_lr) / self.total_iters
+        model.optimizer.learning_rate = self.start_lr
 
 class ExponentialLR(LRScheduler):
     def __init__(

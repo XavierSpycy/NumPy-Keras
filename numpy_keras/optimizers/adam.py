@@ -62,8 +62,8 @@ class Adam(Optimizer):
                     # Update biased second raw moment estimate
                     self.second_moment[i][key] *= self.beta2
                     # Correct bias
-                    self.first_moment[i][key] += (1 - self.beta1) * layer.grads[key]
-                    self.second_moment[i][key] += (1 - self.beta2) * np.square(layer.grads[key])
+                    self.first_moment[i][key] += (1 - self.beta1) * grad
+                    self.second_moment[i][key] += (1 - self.beta2) * np.square(grad)
                     # Update parameters
                     first_moment_hat = self.first_moment[i][key] / (1 - self.beta1 ** self.t)
                     second_moment_hat = self.second_moment[i][key] / (1 - self.beta2 ** self.t)

@@ -80,6 +80,8 @@ class EarlyStopping:
         # Update step
         curr_epoch = self.step
         self.step += 1
+        # Reset the flag: it is set again below only on improvement
+        self.save_best = False
         # If curr_epoch is less than start_from_epoch, return False, False
         if curr_epoch <= self.start_from_epoch:
             return False, False
