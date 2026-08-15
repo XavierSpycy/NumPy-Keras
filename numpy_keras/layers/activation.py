@@ -33,6 +33,8 @@ class Activation:
         self.__activation_derive_config = {}
         self.__activation_mapper = _ActivationMapper()
 
+        self.__input_shape = None
+
     def set_activation_deriv(
             self, 
             prev_layer_activation: str,
@@ -49,6 +51,18 @@ class Activation:
 
         self.__activation_deriv = self.__activation_mapper[prev_layer_activation + '_deriv'] if prev_layer_activation else None
         self.__activation_derive_config = prev_layer_activation_config
+
+    def set_input_shape(
+            self,
+            shape,
+        ) -> None:
+
+        """
+        Set the input shape. The activation is elementwise, so the shape is
+        passed through unchanged for the next layer.
+        """
+
+        self.__input_shape = shape
     
     def set_output_dim(
             self, 
@@ -95,6 +109,10 @@ class Activation:
     @property
     def output_dim(self):
         return self.__output_dim
+
+    @property
+    def output_shape(self):
+        return self.__input_shape
     
     def __str__(self):
         return f"Activation(activation={self.__activation})"

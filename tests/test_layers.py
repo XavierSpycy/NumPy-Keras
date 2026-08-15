@@ -173,6 +173,10 @@ def test_input_output_dim():
     assert layers.Input(10).output_dim == 10
 
 
+def test_input_accepts_tuple_shape():
+    assert layers.Input((28, 28, 1)).output_dim == 784
+
+
 def test_activation_layer_forward_and_backward():
     act = layers.Activation("tanh")
     act.set_activation_deriv("sigmoid", {})
@@ -184,3 +188,47 @@ def test_activation_layer_forward_and_backward():
     # directly to this layer's input: sigmoid_deriv(x) = x * (1 - x)
     expected = grad * (X * (1 - X))
     np.testing.assert_allclose(act.backward(grad), expected)
+
+
+def test_batchnorm_4d_normalizes_per_channel():
+    """On (N, H, W, C) inputs gamma/beta are per-channel and the batch
+    statistics run over (N, H, W)."""
+    rng = np.random.RandomState(11)
+    bn = layers.BatchNormalization()
+    bn.set_input_shape((4, 4, 3))
+    bn.init_params(4 * 4 * 3)   # the scalar output_dim passed by Sequential
+    assert bn.params["gamma"].shape == (3,)
+    assert bn.params["beta"].shape == (3,)
+    X = rng.randn(32, 4, 4, 3) * 5 + 10
+    out = bn.forward(X, is_training=True)
+    assert out.shape == X.shape
+    assert np.allclose(out.mean(axis=(0, 1, 2)), bn.params["beta"], atol=1e-6)
+    assert np.allclose(out.var(axis=(0, 1, 2)), bn.params["gamma"] ** 2, atol=1e-6)
+
+
+def test_batchnorm_4d_backward_gradient_check():
+    rng = np.random.RandomState(12)
+    bn = layers.BatchNormalization()
+    bn.set_input_shape((3, 3, 2))
+    bn.init_params(3 * 3 * 2)
+    X = rng.randn(4, 3, 3, 2)
+    delta = np.ones((4, 3, 3, 2))
+
+    def total_output():
+        return np.sum(bn.forward(X, is_training=True))
+
+    eps = 1e-6
+    for key in ["gamma", "beta"]:
+        p = bn.params[key]
+        numerical = np.zeros_like(p)
+        for i in range(p.size):
+            orig = p[i]
+            p[i] = orig + eps
+            l1 = total_output()
+            p[i] = orig - eps
+            l2 = total_output()
+            p[i] = orig
+            numerical[i] = (l1 - l2) / (2 * eps)
+        bn.forward(X, is_training=True)  # refresh cached batch statistics
+        bn.backward(delta)
+        np.testing.assert_allclose(bn.grads[key], numerical, rtol=1e-3, atol=1e-6)
