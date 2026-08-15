@@ -14,10 +14,11 @@ from . import utils
 from .. import (
     callbacks,
     layers,
-    losses, 
+    losses,
     metrics,
     optimizers,
 )
+from ..activations._mapper import _ActivationMapper
 
 class Sequential:
     __idx2label = None
@@ -104,12 +105,20 @@ class Sequential:
         X = np.array(X).copy()
         y = np.array(y).copy()
 
-        y_pred = self.predict(X, batch_size)
+        y_hat = self.__forward(X, is_training=False)
+        if self.__loss_func.name == 'sparse_categorical_crossentropy':
+            if y.ndim == 2 and y.shape[1] == 1:
+                y = y.ravel()
+            y_, _ = utils.one_hot_encode(y, self.__idx2label)
+        else:
+            y_ = y
+        loss = self.__loss_func(y_, y_hat)
 
         if self.__metrics:
+            y_pred = self.predict(X, batch_size)
             return metrics._MetricMapper()[self.__metrics[0]](y, y_pred)
         else:
-            return self.__loss_func(y, y_pred)
+            return loss
     
     def fit(
             self, 
@@ -137,11 +146,15 @@ class Sequential:
         self.__best_weights = None
         
         if self.__loss_func.name == 'sparse_categorical_crossentropy':
+            if y_train.ndim == 2 and y_train.shape[1] == 1:
+                y_train = y_train.ravel()
             y_train, self.__idx2label = utils.one_hot_encode(y_train)
-        
+
         if validation_data is not None:
             X_test, y_test = validation_data
             if self.__loss_func.name == 'sparse_categorical_crossentropy':
+                if y_test.ndim == 2 and y_test.shape[1] == 1:
+                    y_test = y_test.ravel()
                 y_test, _ = utils.one_hot_encode(y_test, self.__idx2label)
         elif not np.isclose(validation_split, 0.0):
             X_train, X_test, y_train, y_test = utils.train_test_split(
@@ -213,17 +226,22 @@ class Sequential:
                         model=self,
                     )
 
-                    if hasattr(callback, 'save_best_weight') and callback.save_best_weight:
-                        self.__best_weights = self.parameters # {idx: {key: param for key, param in layer.params.items()} for idx, layer in self.layers.items() if hasattr(layer, 'params')}
-            
+                    if hasattr(callback, 'save_best') and callback.save_best:
+                        # copy the arrays: optimizers update params in place,
+                        # so keeping references would alias later epochs
+                        self.__best_weights = {
+                            idx: {param: value.copy() for param, value in layer.params.items()}
+                            for idx, layer in self.layers.items() if hasattr(layer, 'params')
+                        }
+
             if self.stop_training:
                 break
-        
+
         if self.__best_weights is not None:
-                for idx, layer in self.parameters:
-                    for param in layer.params:
-                        self.__layers[idx].params[param] = self.__best_weights[idx][param]
-        
+            for idx, params in self.__best_weights.items():
+                for param, value in params.items():
+                    self.__layers[idx].params[param] = value
+
         return self.history
 
     def pop(
@@ -242,17 +260,17 @@ class Sequential:
         ) -> np.ndarray:
         
         X = np.array(X).copy()
-        output = np.zeros(X.shape[0])
+        outputs = []
         for start_idx in range(0, X.shape[0], batch_size):
             end_idx = min(start_idx + batch_size, X.shape[0])
             batch_X = X[start_idx:end_idx]
             batch_output = self.__forward(batch_X, is_training=False)
-            if batch_output.ndim == 2 and batch_output.shape[1] == 1:
-                batch_output = batch_output.flatten()
             if self.__idx2label is not None:
                 batch_output = np.array([self.__idx2label[np.argmax(pred, axis=0)] for pred in batch_output])
-            output[start_idx:end_idx] = batch_output
-        return output
+            elif batch_output.ndim == 2 and batch_output.shape[1] == 1:
+                batch_output = batch_output.flatten()
+            outputs.append(batch_output)
+        return np.concatenate(outputs)
     
     def summary(self):
         print("Model: Sequential")
@@ -292,17 +310,28 @@ class Sequential:
             output_dim = layer.output_dim
     
     def __criterion(
-            self, 
-            y: np.ndarray, 
+            self,
+            y: np.ndarray,
             y_hat: np.ndarray,
         ) -> Tuple[np.float64, np.ndarray]:
 
         y_ = y.copy()
         if y.ndim == 1 and y_hat.ndim == 2:
             y_ = y_.reshape(-1, 1)
-        activation_deriv = list(self.layers.values())[-1].activation_deriv
         loss = self.__loss_func(y_, y_hat)
-        grad = self.__loss_func.grad(y_, y_hat) * activation_deriv(y_hat)
+        grad = self.__loss_func.grad(y_, y_hat)
+        # Chain through the activation of the last layer itself. Derivs are
+        # defined on the post-activation value, so evaluate at y_hat. For
+        # softmax the loss grad already includes the activation
+        # (d softmax+CE / d logits), and no softmax_deriv exists.
+        last_layer = list(self.layers.values())[-1]
+        if hasattr(last_layer, 'activation'):
+            try:
+                activation_deriv = _ActivationMapper()[last_layer.activation + '_deriv']
+            except ValueError:
+                activation_deriv = None
+            if activation_deriv is not None:
+                grad = grad * activation_deriv(y_hat, **last_layer.activation_config)
         return loss, grad
 
     def __forward(
