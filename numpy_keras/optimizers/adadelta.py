@@ -3,6 +3,7 @@ from typing import List
 import numpy as np
 
 from ._base import Optimizer
+from ..cython import _kernels as _ck
 
 class Adadelta(Optimizer):
     """
@@ -51,6 +52,20 @@ class Adadelta(Optimizer):
         for i, layer in enumerate(layers):
             if hasattr(layer, 'params') and hasattr(layer, 'grads'):
                 for key in layer.params:
+                    # Optional Cython fast path: one fused pass per param array
+                    if (_ck is not None
+                            and layer.params[key].dtype == np.float64
+                            and layer.params[key].flags.c_contiguous
+                            and layer.grads[key].flags.c_contiguous
+                            and self.accum_grad_square[i][key].flags.c_contiguous
+                            and self.accum_delta_square[i][key].flags.c_contiguous):
+                        _ck.adadelta_update(
+                            layer.params[key], layer.grads[key],
+                            self.accum_grad_square[i][key],
+                            self.accum_delta_square[i][key],
+                            self.learning_rate, self.rho, self.epsilon,
+                            self.weight_decay)
+                        continue
                     # Get the gradient
                     grad = layer.grads[key]
                     # Add weight decay

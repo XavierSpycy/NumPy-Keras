@@ -8,6 +8,12 @@ import numpy as np
 
 from ..activations._mapper import _ActivationMapper
 from ..initializers._mapper import _InitializerMapper
+from ..cython import _kernels as _ck
+
+# Kernel dispatch codes for the optional Cython fast path; unknown
+# activations fall through to the pure NumPy code below.
+_ACT_CODES = {"linear": 0, "relu": 1, "sigmoid": 2, "tanh": 3, "softmax": 4}
+_DERIV_CODES = {"linear_deriv": 0, "relu_deriv": 1, "sigmoid_deriv": 2, "tanh_deriv": 3}
 
 class Dense:
     """
@@ -49,6 +55,7 @@ class Dense:
         self.__bias_initializer_config = bias_initializer_config
         
         self.__activation_deriv = None
+        self.__activation_deriv_code = -1
         self.__activation_derive_config = {}
         self.__activation_mapper = _ActivationMapper()
         self.__initializer = _InitializerMapper()
@@ -68,6 +75,9 @@ class Dense:
         """
 
         self.__activation_deriv = self.__activation_mapper[prev_layer_activation + '_deriv'] if prev_layer_activation else None
+        self.__activation_deriv_code = (
+            _DERIV_CODES.get(prev_layer_activation + '_deriv', -2)
+            if prev_layer_activation else -1)
         self.__activation_derive_config = prev_layer_activation_config
     
     def init_params(
@@ -106,6 +116,17 @@ class Dense:
         - is_training (bool): Whether the model is training or not.
         """
 
+        if (_ck is not None and inputs.ndim == 2
+                and inputs.dtype == np.float64
+                and self.params["W"].dtype == np.float64
+                and not self.__activation_config
+                and self.activation in _ACT_CODES):
+            self.output = _ck.dense_forward(
+                inputs, self.params["W"], self.params.get("b"),
+                _ACT_CODES[self.activation])
+            self.inputs = inputs
+            return self.output
+
         lin_output = np.dot(inputs, self.params["W"]) + self.params["b"] if "b" in self.params else np.dot(inputs, self.params["W"])
         self.output = self.__activation_mapper[self.activation](lin_output, **self.__activation_config) if self.activation is not None else lin_output
         self.inputs = inputs
@@ -122,7 +143,21 @@ class Dense:
         Parameters:
         - grad (ndarray): The gradient of the loss.
         """
-        
+
+        if (_ck is not None and grad.ndim == 2
+                and grad.dtype == np.float64
+                and self.inputs.ndim == 2
+                and self.inputs.dtype == np.float64
+                and self.params["W"].dtype == np.float64
+                and not self.__activation_derive_config
+                and self.__activation_deriv_code != -2):
+            dW, db, grad_next = _ck.dense_backward(
+                self.inputs, grad, self.params["W"], self.__activation_deriv_code)
+            self.grads["W"] = dW
+            if "b" in self.grads:
+                self.grads["b"] = db
+            return grad_next
+
         self.grads["W"] = np.dot(self.inputs.T, grad)
         if "b" in self.grads:
             self.grads["b"] = np.sum(grad, axis=0)

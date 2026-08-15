@@ -273,7 +273,10 @@ class Sequential:
             batch_X = X[start_idx:end_idx]
             batch_output = self.__forward(batch_X, is_training=False)
             if self.__idx2label is not None:
-                batch_output = np.array([self.__idx2label[np.argmax(pred, axis=0)] for pred in batch_output])
+                if _ck is not None and batch_output.ndim == 2 and batch_output.dtype == np.float64:
+                    batch_output = np.array([self.__idx2label[i] for i in _ck.argmax_rows(batch_output)])
+                else:
+                    batch_output = np.array([self.__idx2label[np.argmax(pred, axis=0)] for pred in batch_output])
             elif batch_output.ndim == 2 and batch_output.shape[1] == 1:
                 batch_output = batch_output.flatten()
             outputs.append(batch_output)
