@@ -184,6 +184,25 @@ print(f"Accuracy on the test set: {model.evaluate(X_test, y_test):.2%}")
 
 只要版本没有太大的差异, 我们相信这个库应该可以在其他版本上正常运行。
 
+### 2.1 可选的 Cython 加速
+默认情况下, 本库完全基于纯 NumPy 运行。如果您希望加速训练与推理, 可以编译可选的 Cython 内核 (优化器更新对每个参数数组做单趟融合计算、`Dense` 层的偏置/激活函数融合、编译版逐元素激活函数):
+
+```
+pip install cython>=3.0.10
+python build_cython.py build_ext --inplace
+```
+
+库在导入时会自动检测编译产物并使用; 未编译时 (或设置了环境变量 `NUMPY_KERAS_DISABLE_CYTHON` 时), 自动回退到纯 NumPy 实现, 行为完全一致。两条路径通过一致性测试 (`tests/test_cython_kernels.py`) 互相校验, `benchmarks/bench_cython.py` 用于测量加速比。
+
+下表由 `python benchmarks/bench_cython.py` 生成 (每个单元格重复 5 次, 取均值 ± 标准差; 两种模式在同一会话中测得)。两种模式均包含纯 Python 热路径修复 (跳过无 metrics 时的全量预测、缓存激活函数查找), 因此表中的加速比仅来自 Cython 层。
+
+| 配置 | 纯 NumPy | Cython | 加速比 |
+|---|---|---|---|
+| 教学规模 3000x64, 隐层 [128, 64, 1], 5 epochs, batch 32 | 0.195s ± 0.021 | 0.136s ± 0.001 | ~1.4x |
+| MNIST 规模 10000x784, 隐层 [256, 256, 10], 3 epochs, batch 64 | 25.16s ± 2.24 | 19.15s ± 1.32 | ~1.3x |
+
+测试环境: Apple M2 Pro (Mac14,9, 16 GB 内存, macOS arm64), Python 3.12.8, NumPy 1.26.4。加速比取决于 CPU、BLAS 实现与矩阵规模, 请勿期望在其他机器上得到完全相同的数字。绝对耗时尤其容易受并发负载影响——BLAS 密集型任务受影响最大 (同一台机器在空闲窗口下, 同一脚本测得 MNIST 配置约为 2.5s 对 4.1s), 而加速比在不同负载下保持在 ~1.3-1.6x 区间。建议在自己的机器上重新运行 benchmark 后再下结论。
+
 ## :sparkles: 3. 其他数据集上的测试
 或许看到这里您会有一个疑问: 我们只在 MNIST 数据集上进行了测试, 从准确率上来看, 我们的模型表现得非常好。但是, 有没有可能是因为我们的模型在 MNIST 数据集上过拟合了呢? 那么在其他数据集上的表现如何呢?
 
