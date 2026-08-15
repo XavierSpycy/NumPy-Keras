@@ -1,2 +1,4 @@
 .DS_Store
 *.pyc
+.pytest_cache/
+.ipynb_checkpoints/
