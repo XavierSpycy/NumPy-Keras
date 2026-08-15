@@ -80,8 +80,27 @@ class Dense:
             if prev_layer_activation else -1)
         self.__activation_derive_config = prev_layer_activation_config
     
+    def set_input_shape(
+            self,
+            shape,
+        ) -> None:
+
+        """
+        Set the input shape. Dense consumes flat 1D inputs; higher-rank
+        shapes (e.g. the (T, units) sequence of a return_sequences=True
+        RNN) need a Flatten layer in between.
+
+        Parameters:
+        - shape (tuple): The input shape without the batch axis.
+        """
+
+        if len(shape) > 1:
+            raise ValueError(
+                f"Dense expects a 1D input shape, got {shape}; "
+                f"add a Flatten layer first.")
+
     def init_params(
-            self, 
+            self,
             input_dim: int,
         ) -> None:
 

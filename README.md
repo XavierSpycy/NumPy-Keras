@@ -192,7 +192,7 @@ pip install cython>=3.0.10
 python build_cython.py build_ext --inplace
 ```
 
-The library detects the compiled module at import time and uses it automatically; when it is not built (or when the `NUMPY_KERAS_DISABLE_CYTHON` environment variable is set), it falls back to the pure NumPy implementations with identical behavior. The pure and compiled paths are pinned against each other by parity tests (`tests/test_cython_kernels.py`), and `benchmarks/bench_cython.py` measures the speedup. For the CNN, `im2col` itself is deliberately *not* compiled — building the column matrix is a strided copy that NumPy already performs at memcpy speed — but the scatter-add back (`col2im`, ~16x on one batch) and the max-pooling window scan (~2.7x) are, and the convolution's matmul + activation reuse the fused `Dense` kernels.
+The library detects the compiled module at import time and uses it automatically; when it is not built (or when the `NUMPY_KERAS_DISABLE_CYTHON` environment variable is set), it falls back to the pure NumPy implementations with identical behavior. The pure and compiled paths are pinned against each other by parity tests (`tests/test_cython_kernels.py`), and `benchmarks/bench_cython.py` measures the speedup. For the CNN, `im2col` itself is deliberately *not* compiled — building the column matrix is a strided copy that NumPy already performs at memcpy speed — but the scatter-add back (`col2im`, ~16x on one batch) and the max-pooling window scan (~2.7x) are, and the convolution's matmul + activation reuse the fused `Dense` kernels. The RNN layers have no kernels: each timestep is already a BLAS matrix product, so whether the Python loop over timesteps is worth compiling remains to be measured.
 
 The table below was produced with `python benchmarks/bench_cython.py` (MLP rows: 5 repetitions; CNN row: 3 repetitions; mean ± standard deviation; the two modes were measured in the same session). Both modes include the pure-Python hot-path fixes (metrics-skip, cached activation lookups), so the speedup shown comes from the Cython layer alone.
 
@@ -605,6 +605,26 @@ you can seamlessly switch to the functionality of `autograd`.
     - **Definition**:
         Max pooling downsamples the feature maps by taking the maximum of each pooling window; the backward pass routes each gradient to the input position that won the maximum (accumulating with `np.add.at` because overlapping windows share pixels).
 
+- **[SimpleRNN](numpy_keras/layers/simple_rnn.py)**:
+    - **Definition**:
+        The simplest recurrent layer: at every timestep the same weights combine the current input and the previous hidden state, $h_t = f(x_t W_{xh} + h_{t-1} W_{hh} + b)$, and the hidden state carries memory across the sequence. Training unrolls the chain rule backwards over time (BPTT); with `return_sequences=False` the gradient arrives only at the last timestep and reaches earlier ones solely through the recurrence.
+    - Supports `activation` (default `'tanh'`), `return_sequences`, `use_bias`, and separate `kernel_initializer` / `recurrent_initializer`; parameters are `(F, units)`, `(units, units)` and `(units,)`.
+
+- **[LSTM](numpy_keras/layers/lstm.py)**:
+    - **Definition**:
+        Long Short-Term Memory: an explicit memory cell `c_t` plus three gates, in the Keras layout `[i, f, g, o]`:
+        `i, f, o = sigmoid(...)`, `g = tanh(...)` (slices of one shared pre-activation `x_t @ W_xh + h_{t-1} @ W_hh + b`), then `c_t = f * c_{t-1} + i * g` and `h_t = o * tanh(c_t)`. The forget gate decides what old memory to keep, the input gate what new information to store — the mechanism that lets gradients flow through long sequences without vanishing as fast as in a plain RNN.
+    - Supports `activation` (the cell candidate, default `'tanh'`), `recurrent_activation` (the gates, default `'sigmoid'`), `return_sequences`, `use_bias`; parameters are `(F, 4U)`, `(U, 4U)` and `(4U,)`.
+
+- **[GRU](numpy_keras/layers/gru.py)**:
+    - **Definition**:
+        Gated Recurrent Unit — the LSTM's essential mechanism with one less gate, in the Keras layout `[z, r, h̃]` with the classic (reset_after=False) formulation:
+        `z = sigmoid(x_t @ W_xh + h_{t-1} @ W_hh + b)`, `r = sigmoid(...)`, `h̃ = tanh(x_t @ W_xh + (r * h_{t-1}) @ W_hh + b_h)`, `h_t = (1 - z) * h_{t-1} + z * h̃`. The update gate `z` interpolates between the old state and the candidate; the reset gate `r` decides how much of the old state the candidate may see.
+    - Supports `activation` (the candidate, default `'tanh'`), `recurrent_activation` (the gates, default `'sigmoid'`), `return_sequences`, `use_bias`; parameters are `(F, 3U)`, `(U, 3U)` and `(3U,)`.
+
+> [!NOTE]
+> RNN layers own their output chain completely: their `activation` property returns `None` (even for SimpleRNN), and the activation derivative is applied inside `backward` at every timestep — the hidden state also feeds the recurrence, so the chain must run inside the layer anyway. The generic elementwise-derivative convention (the *next* layer applies it) only fits Dense/Conv2D/Activation. Also, a `return_sequences=True` RNN outputs `(N, T, U)`; a `Dense` after it needs a `Flatten` in between (the model raises a helpful error otherwise). The RNN layers are pure NumPy — no Cython kernels, since the per-timestep work is already BLAS matrix products (see §2.1).
+
 - **[Input](numpy_keras/layers/input.py)**:
     - **Definition**:
         The input layer is the first layer in a neural network, which receives input data and passes it to the next layer. The input layer has no weights or biases and is used to define the shape of the input data. It accepts an int (a 1D feature vector of that size) or a full shape tuple such as `(28, 28, 1)`.
@@ -639,6 +659,25 @@ history = model.fit(X, y, batch_size=32, epochs=2, shuffle=True)
 # Accuracy on the training set: ~93% after 2 epochs on 2000 samples
 ```
 
+The same images can be read row by row as a sequence — 28 timesteps of 28 pixels each:
+
+```python
+X = X.reshape(-1, 28, 28)                # (N, T, F): one row per timestep
+X, y = X[:800], y[:800]                  # keep the example fast
+
+model = Sequential()
+model.add(layers.Input((28, 28)))
+model.add(layers.LSTM(32))
+model.add(layers.Dense(10, activation="softmax"))
+model.compile(loss="sparse_categorical_crossentropy", optimizer="adam",
+              metrics=["accuracy"])
+model.optimizer.learning_rate = 0.01
+
+history = model.fit(X, y, batch_size=32, epochs=10, shuffle=True)
+# Accuracy on the training set: ~80-88% after 10 epochs on 800 samples,
+# depending on the random seed
+```
+
 ### 4.3 Optimizers
 Right here, we have implemented the optimizers commonly used by beginners to help them better understand the optimization process of deep learning. We believe that these optimizers are very helpful for beginners to understand the optimization process of deep learning.
 
@@ -666,7 +705,7 @@ Right here, we have implemented the optimizers commonly used by beginners to hel
 > In addition, although the parameters of the learning rate scheduler are slightly adjusted, the overall interface is very similar to `Keras`. We believe that such adjustments are reasonable because they make the interface more user-friendly and more intuitive, especially for beginners.
 
 ## :sparkles: 5. Conclusion
-`NumPy-Keras` is a multi-layer perceptron (MLP) library implemented using `NumPy`. It aims to provide a simple and easy-to-understand neural network implementation to help users learn and teach deep learning. The library does not depend on any third-party deep learning frameworks such as `TensorFlow` or `PyTorch` and only requires `Python` and `NumPy` to run, making it suitable for beginners to understand the basic principles of deep learning. `NumPy-Keras` provides an API similar to `Keras` and supports features such as visualization of the training process, progress bar display, and training history charts. With this lightweight framework, users can quickly build and train MLP models and explore the basic concepts of deep learning.
+`NumPy-Keras` is a deep learning library implemented using `NumPy`, covering the classic architecture trilogy — multilayer perceptrons, convolutional networks and recurrent networks (SimpleRNN/LSTM/GRU). It aims to provide a simple and easy-to-understand neural network implementation to help users learn and teach deep learning. The library does not depend on any third-party deep learning frameworks such as `TensorFlow` or `PyTorch` and only requires `Python` and `NumPy` to run, making it suitable for beginners to understand the basic principles of deep learning. `NumPy-Keras` provides an API similar to `Keras` and supports features such as visualization of the training process, progress bar display, and training history charts. With this lightweight framework, users can quickly build and train models and explore the basic concepts of deep learning.
 
 ## :sparkles: 6. Version Log
 - v1
