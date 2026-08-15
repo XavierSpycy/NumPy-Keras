@@ -2,3 +2,8 @@
 *.pyc
 .pytest_cache/
 .ipynb_checkpoints/
+
+# Cython acceleration artifacts (python build_cython.py build_ext --inplace)
+*.so
+build/
+numpy_keras/cython/_kernels.c

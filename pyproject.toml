@@ -24,10 +24,14 @@ autograd-viz = [
     "matplotlib==3.8.2",
     "autograd==1.7.0"
 ]
+cython = [
+    "cython>=3.0.10"
+]
 all = [
     "tqdm==4.66.1",
     "matplotlib==3.8.2",
     "autograd==1.7.0",
+    "cython>=3.0.10",
 ]
 
 [project.urls]
