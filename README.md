@@ -185,23 +185,24 @@ Here are the versions of `tqdm`, `matplotlib`, and `autograd`:
 If there are no major differences in the versions, we believe that this library should work on other versions as well.
 
 ### 2.1 Optional Cython Acceleration
-By default, everything runs on pure NumPy. If you would like to speed up training and inference, you can compile the optional Cython kernels (one fused pass per parameter array for the optimizer updates, fused bias/activation passes for `Dense`, and compiled elementwise activations):
+By default, everything runs on pure NumPy. If you would like to speed up training and inference, you can compile the optional Cython kernels (one fused pass per parameter array for the optimizer updates, fused bias/activation passes for `Dense`, compiled elementwise activations, and compiled `col2im` / max-pooling kernels for the convolutional layers):
 
 ```
 pip install cython>=3.0.10
 python build_cython.py build_ext --inplace
 ```
 
-The library detects the compiled module at import time and uses it automatically; when it is not built (or when the `NUMPY_KERAS_DISABLE_CYTHON` environment variable is set), it falls back to the pure NumPy implementations with identical behavior. The pure and compiled paths are pinned against each other by parity tests (`tests/test_cython_kernels.py`), and `benchmarks/bench_cython.py` measures the speedup.
+The library detects the compiled module at import time and uses it automatically; when it is not built (or when the `NUMPY_KERAS_DISABLE_CYTHON` environment variable is set), it falls back to the pure NumPy implementations with identical behavior. The pure and compiled paths are pinned against each other by parity tests (`tests/test_cython_kernels.py`), and `benchmarks/bench_cython.py` measures the speedup. For the CNN, `im2col` itself is deliberately *not* compiled — building the column matrix is a strided copy that NumPy already performs at memcpy speed — but the scatter-add back (`col2im`, ~16x on one batch) and the max-pooling window scan (~2.7x) are, and the convolution's matmul + activation reuse the fused `Dense` kernels.
 
-The table below was produced with `python benchmarks/bench_cython.py` (5 repetitions per cell, mean ± standard deviation; the two modes were measured in the same session). Both modes include the pure-Python hot-path fixes (metrics-skip, cached activation lookups), so the speedup shown comes from the Cython layer alone.
+The table below was produced with `python benchmarks/bench_cython.py` (MLP rows: 5 repetitions; CNN row: 3 repetitions; mean ± standard deviation; the two modes were measured in the same session). Both modes include the pure-Python hot-path fixes (metrics-skip, cached activation lookups), so the speedup shown comes from the Cython layer alone.
 
 | Configuration | Pure NumPy | Cython | Speedup |
 |---|---|---|---|
 | teaching-scale 3000x64, hidden [128, 64, 1], 5 epochs, batch 32 | 0.195s ± 0.021 | 0.136s ± 0.001 | ~1.4x |
 | MNIST-like 10000x784, hidden [256, 256, 10], 3 epochs, batch 64 | 25.16s ± 2.24 | 19.15s ± 1.32 | ~1.3x |
+| LeNet-style CNN (6@5x5 / pool / 16@5x5 / pool / 120 / 10) on 2000x28x28 MNIST, 2 epochs, batch 32 | 14.47s ± 0.66 | 8.69s ± 0.30 | ~1.7x |
 
-Measured on an Apple M2 Pro (Mac14,9, 16 GB RAM, macOS arm64) with Python 3.12.8 and NumPy 1.26.4. The speedup depends on the CPU, the BLAS implementation, and the matrix sizes, so do not expect identical numbers on other machines. Absolute times in particular are sensitive to concurrent load — BLAS-heavy workloads are affected the most (in an idle window on the same machine the script measured ~2.5s vs ~4.1s for the MNIST-like configuration), while the speedup ratio stayed in the ~1.3-1.6x band across conditions. Re-run the benchmark on your own machine before drawing conclusions.
+Measured on an Apple M2 Pro (Mac14,9, 16 GB RAM, macOS arm64) with Python 3.12.8 and NumPy 1.26.4. The speedup depends on the CPU, the BLAS implementation, and the matrix sizes, so do not expect identical numbers on other machines. Absolute times in particular are sensitive to concurrent load — BLAS-heavy workloads are affected the most (in an idle window on the same machine the script measured ~2.5s vs ~4.1s for the MNIST-like configuration), while the speedup ratio stayed in the ~1.3-1.6x band across conditions. Re-run the benchmark on your own machine before drawing conclusions. Training trajectories are essentially identical in both modes: on the CNN configuration above, two epochs of the two modes reached the same loss and accuracy to four decimal places.
 
 ## :sparkles: 3. Testing on Other Datasets
 Perhaps you have a question: We only tested on the MNIST dataset, and our model performed very well in terms of accuracy. But is it possible that our model overfits on the MNIST dataset? How does it perform on other datasets?
@@ -591,11 +592,52 @@ you can seamlessly switch to the functionality of `autograd`.
 
 - **[Flatten](numpy_keras/layers/flatten.py)**:
     - **Definition**:
-        The flatten layer is a layer used in neural networks to flatten the input data into a one-dimensional array. This is useful when connecting a convolutional layer to a fully connected layer, as the fully connected layer requires a one-dimensional input.
+        The flatten layer is a layer used in neural networks to flatten the input data into a one-dimensional array. This is useful when connecting a convolutional layer to a fully connected layer, as the fully connected layer requires a one-dimensional input. Its input shape is inferred from the previous layer automatically (`layers.Flatten()`), but can still be passed explicitly.
+
+- **[Conv2D](numpy_keras/layers/conv2d.py)**:
+    - **Definition**:
+        A 2D convolutional layer: each filter slides over the input image and produces one feature map. It is implemented with the classic **im2col** trick (CS231n style): every kh × kw × C receptive field is rearranged into a row of a matrix, so the whole convolution becomes a single matrix product `cols(X) @ W_flat`, executed by BLAS. The backward pass reverses the operation with a scatter-add (`col2im`).
+    - **Mathematical Representation**:    
+        For filter $W$ of shape (kh, kw, C), bias $b$, and a receptive field $x$: $y_{i,j} = f(\Sigma_{p,q,c} W_{p,q,c} x_{i+p, j+q, c} + b)$
+    - Supports `kernel_size`, `stride`, `padding` (int or `'same'`), `activation`, and per-filter `use_bias`; parameters are stored as `(kh, kw, in_channels, filters)` plus `(filters,)` for the bias.
+
+- **[MaxPool2D](numpy_keras/layers/maxpool2d.py)**:
+    - **Definition**:
+        Max pooling downsamples the feature maps by taking the maximum of each pooling window; the backward pass routes each gradient to the input position that won the maximum (accumulating with `np.add.at` because overlapping windows share pixels).
 
 - **[Input](numpy_keras/layers/input.py)**:
     - **Definition**:
-        The input layer is the first layer in a neural network, which receives input data and passes it to the next layer. The input layer has no weights or biases and is used to define the shape of the input data.
+        The input layer is the first layer in a neural network, which receives input data and passes it to the next layer. The input layer has no weights or biases and is used to define the shape of the input data. It accepts an int (a 1D feature vector of that size) or a full shape tuple such as `(28, 28, 1)`.
+
+A LeNet-style CNN on the bundled MNIST subset (`data/mnist_train_small.csv`) builds exactly like the MLPs above:
+
+```python
+import csv
+import numpy as np
+from numpy_keras import Sequential
+from numpy_keras import layers
+
+with open("data/mnist_train_small.csv") as f:
+    rows = list(csv.reader(f))
+X = np.array([[float(v) for v in r[1:]] for r in rows]) / 255.0
+y = np.array([int(r[0]) for r in rows])
+X = X.reshape(-1, 28, 28, 1)             # (N, H, W, C)
+
+model = Sequential()
+model.add(layers.Input((28, 28, 1)))
+model.add(layers.Conv2D(6, kernel_size=5, activation="relu"))
+model.add(layers.MaxPool2D(pool_size=2))
+model.add(layers.Conv2D(16, kernel_size=5, activation="relu"))
+model.add(layers.MaxPool2D(pool_size=2))
+model.add(layers.Flatten())
+model.add(layers.Dense(120, activation="tanh"))
+model.add(layers.Dense(10, activation="softmax"))
+model.compile(loss="sparse_categorical_crossentropy", optimizer="adam",
+              metrics=["accuracy"])
+
+history = model.fit(X, y, batch_size=32, epochs=2, shuffle=True)
+# Accuracy on the training set: ~93% after 2 epochs on 2000 samples
+```
 
 ### 4.3 Optimizers
 Right here, we have implemented the optimizers commonly used by beginners to help them better understand the optimization process of deep learning. We believe that these optimizers are very helpful for beginners to understand the optimization process of deep learning.
