@@ -192,7 +192,7 @@ pip install cython>=3.0.10
 python build_cython.py build_ext --inplace
 ```
 
-库在导入时会自动检测编译产物并使用; 未编译时 (或设置了环境变量 `NUMPY_KERAS_DISABLE_CYTHON` 时), 自动回退到纯 NumPy 实现, 行为完全一致。两条路径通过一致性测试 (`tests/test_cython_kernels.py`) 互相校验, `benchmarks/bench_cython.py` 用于测量加速比。对于 CNN, `im2col` 本身有意**不**编译——列矩阵的构造本质是一次跨步拷贝, NumPy 已经以 memcpy 级别的速度完成——但反向的散射累加 (`col2im`, 单个 batch 上约 16x) 与最大池化的窗口扫描 (约 2.7x) 是编译的, 卷积的矩阵乘法与激活函数则直接复用融合的 `Dense` 内核。
+库在导入时会自动检测编译产物并使用; 未编译时 (或设置了环境变量 `NUMPY_KERAS_DISABLE_CYTHON` 时), 自动回退到纯 NumPy 实现, 行为完全一致。两条路径通过一致性测试 (`tests/test_cython_kernels.py`) 互相校验, `benchmarks/bench_cython.py` 用于测量加速比。对于 CNN, `im2col` 本身有意**不**编译——列矩阵的构造本质是一次跨步拷贝, NumPy 已经以 memcpy 级别的速度完成——但反向的散射累加 (`col2im`, 单个 batch 上约 16x) 与最大池化的窗口扫描 (约 2.7x) 是编译的, 卷积的矩阵乘法与激活函数则直接复用融合的 `Dense` 内核。RNN 层没有内核: 每个时间步本身已经是 BLAS 矩阵乘法, 时间步上的 Python 循环是否值得编译尚待实测。
 
 下表由 `python benchmarks/bench_cython.py` 生成 (MLP 两行: 重复 5 次; CNN 行: 重复 3 次; 取均值 ± 标准差; 两种模式在同一会话中测得)。两种模式均包含纯 Python 热路径修复 (跳过无 metrics 时的全量预测、缓存激活函数查找), 因此表中的加速比仅来自 Cython 层。
 
@@ -610,6 +610,29 @@ import numpy_keras.autograd as keras
   - **定义**:
     最大池化通过对每个池化窗口取最大值来对特征图进行下采样; 反向传播将每个梯度送回窗口中胜出的输入位置 (使用 `np.add.at` 累加, 因为重叠窗口会共享像素)。
 
+- **[SimpleRNN](numpy_keras/layers/simple_rnn.py)**:
+  - 简单循环层 (Simple Recurrent Layer)
+  - **定义**:
+    最简单的循环层: 每个时间步用同一组权重组合当前输入与上一个隐状态, $h_t = f(x_t W_{xh} + h_{t-1} W_{hh} + b)$, 隐状态在序列中携带记忆。训练时沿时间反向展开链式法则 (BPTT); 当 `return_sequences=False` 时梯度只到达最后一个时间步, 并通过循环路径流回更早的时刻。
+  - 支持 `activation` (默认 `'tanh'`)、`return_sequences`、`use_bias` 以及独立的 `kernel_initializer` / `recurrent_initializer`; 参数形状为 `(F, units)`、`(units, units)` 与 `(units,)`。
+
+- **[LSTM](numpy_keras/layers/lstm.py)**:
+  - 长短期记忆层 (Long Short-Term Memory Layer)
+  - **定义**:
+    长短期记忆: 显式的记忆细胞 `c_t` 加上三个门, 采用 Keras 的门序 `[i, f, g, o]`:
+    `i, f, o = sigmoid(...)`、`g = tanh(...)` (共享同一预激活 `x_t @ W_xh + h_{t-1} @ W_hh + b` 的切片), 然后 `c_t = f * c_{t-1} + i * g`, `h_t = o * tanh(c_t)`。遗忘门决定保留多少旧记忆, 输入门决定存入多少新信息 —— 正是这一机制让梯度能穿过长序列而不像普通 RNN 那样迅速消失。
+  - 支持 `activation` (细胞候选, 默认 `'tanh'`)、`recurrent_activation` (门, 默认 `'sigmoid'`)、`return_sequences`、`use_bias`; 参数形状为 `(F, 4U)`、`(U, 4U)` 与 `(4U,)`。
+
+- **[GRU](numpy_keras/layers/gru.py)**:
+  - 门控循环单元层 (Gated Recurrent Unit Layer)
+  - **定义**:
+    门控循环单元 —— LSTM 的核心机制少一个门, 采用 Keras 的门序 `[z, r, h̃]` 与经典的 (reset_after=False) 形式:
+    `z = sigmoid(x_t @ W_xh + h_{t-1} @ W_hh + b)`, `r = sigmoid(...)`, `h̃ = tanh(x_t @ W_xh + (r * h_{t-1}) @ W_hh + b_h)`, `h_t = (1 - z) * h_{t-1} + z * h̃`。更新门 `z` 在旧状态与候选之间插值; 重置门 `r` 决定候选可以看到多少旧状态。
+  - 支持 `activation` (候选, 默认 `'tanh'`)、`recurrent_activation` (门, 默认 `'sigmoid'`)、`return_sequences`、`use_bias`; 参数形状为 `(F, 3U)`、`(U, 3U)` 与 `(3U,)`。
+
+> [!NOTE]
+> RNN 层完全自行处理输出链: 它们的 `activation` 属性返回 `None` (SimpleRNN 也不例外), 激活函数的导数在每个时间步的 `backward` 内部应用 —— 隐状态同时也馈入循环, 因此这条链本就只能在层内完成。通用的逐元素求导约定 (由*下一层*应用) 只适用于 Dense/Conv2D/Activation。此外, `return_sequences=True` 的 RNN 输出形状为 `(N, T, U)`, 其后的 `Dense` 中间需要 `Flatten` (否则模型会给出明确的报错提示)。RNN 层为纯 NumPy 实现 —— 没有 Cython 内核, 因为每个时间步的工作本身就是 BLAS 矩阵乘法 (见 §2.1)。
+
 - **[Input](numpy_keras/layers/input.py)**:
   - 输入层 (Input Layer)
   - **定义**:
@@ -645,6 +668,24 @@ history = model.fit(X, y, batch_size=32, epochs=2, shuffle=True)
 # 2000 个样本训练 2 个 epoch 后训练集准确率约为 93%
 ```
 
+同样的图像也可以按行读成一个序列 —— 28 个时间步, 每步 28 个像素:
+
+```python
+X = X.reshape(-1, 28, 28)                # (N, T, F): 每行是一个时间步
+X, y = X[:800], y[:800]                  # 控制示例的运行时间
+
+model = Sequential()
+model.add(layers.Input((28, 28)))
+model.add(layers.LSTM(32))
+model.add(layers.Dense(10, activation="softmax"))
+model.compile(loss="sparse_categorical_crossentropy", optimizer="adam",
+              metrics=["accuracy"])
+model.optimizer.learning_rate = 0.01
+
+history = model.fit(X, y, batch_size=32, epochs=10, shuffle=True)
+# 800 个样本训练 10 个 epoch 后训练集准确率约为 80-88%, 视随机种子而定
+```
+
 ### 4.3 优化器 (Optimizers)
 在这里, 我们实现了初学者常用的优化器, 以便于更好地使用。我们认为这些优化器非常有助于初学者理解深度学习的优化过程。
 
@@ -672,7 +713,7 @@ history = model.fit(X, y, batch_size=32, epochs=2, shuffle=True)
 > 另外, 其他部分类的接口参数虽然也有略微的调整, 但是整体上与 `Keras` 的接口非常相似, 我们认为这样的调整是合理的, 因为这样的调整使得接口更加易用, 并且更加符合直觉, 尤其是对初学者来说。
 
 ## :sparkles: 5. 总结
-`NumPy-Keras` 是一个用 NumPy 实现的多层感知机（MLP）库，旨在提供简单且易于理解的神经网络实现，帮助学习和教学。该库不依赖任何第三方深度学习框架，如 `TensorFlow` 或 `PyTorch`，仅需要 `Python` 和 `NumPy` 即可运行，适合初学者理解深度学习的基本原理。`NumPy-Keras` 提供了与 `Keras` 接口类似的 API，支持训练过程的可视化、进度条显示以及训练历史图表等功能。通过这个轻量级框架，用户可以快速构建和训练 MLP 模型，探索深度学习的基础概念。
+`NumPy-Keras` 是一个用 NumPy 实现的深度学习库，覆盖经典架构三部曲——多层感知机、卷积网络与循环网络（SimpleRNN/LSTM/GRU）。它旨在提供简单且易于理解的神经网络实现，帮助学习和教学。该库不依赖任何第三方深度学习框架，如 `TensorFlow` 或 `PyTorch`，仅需要 `Python` 和 `NumPy` 即可运行，适合初学者理解深度学习的基本原理。`NumPy-Keras` 提供了与 `Keras` 接口类似的 API，支持训练过程的可视化、进度条显示以及训练历史图表等功能。通过这个轻量级框架，用户可以快速构建和训练模型，探索深度学习的基础概念。
 
 ## :sparkles: 6. 版本日志
 - v1
