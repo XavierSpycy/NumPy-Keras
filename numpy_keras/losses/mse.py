@@ -20,4 +20,4 @@ class MSE:
             y_true: np.ndarray, 
             y_pred: np.ndarray,
         ) -> np.ndarray:
-        return -2 * (y_true - y_pred)
+        return -2 * (y_true - y_pred) / y_true.size
