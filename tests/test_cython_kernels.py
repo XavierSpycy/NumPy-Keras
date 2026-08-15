@@ -353,6 +353,107 @@ def test_argmax_rows_matches_numpy():
 
 
 # ---------------------------------------------------------------------------
+# Convolution kernels: im2col / col2im / maxpool
+# ---------------------------------------------------------------------------
+
+def _im2col_ref(x, kh, kw, sh, sw):
+    """The pure NumPy im2col from layers/conv2d.py."""
+    cols = np.lib.stride_tricks.sliding_window_view(x, (kh, kw), axis=(1, 2))[:, ::sh, ::sw]
+    cols = cols.transpose(0, 1, 2, 4, 5, 3)   # (N, OH, OW, kh, kw, C)
+    N, OH, OW, _, _, C = cols.shape
+    return cols.reshape(N * OH * OW, kh * kw * C)
+
+
+def test_col2im_matches_numpy_scatter():
+    rng = np.random.RandomState(15)
+    x = rng.randn(3, 7, 7, 2)
+    kh = kw = 3
+    sh = sw = 2
+    grad_cols = rng.randn(*_im2col_ref(x, kh, kw, sh, sw).shape)
+    OH = (7 - 3) // 2 + 1
+    OW = OH
+    N, Hp, Wp, C = x.shape
+
+    # the pure np.add.at scatter from Conv2D.__col2im
+    want = np.zeros((N, Hp, Wp, C))
+    M = OH * OW
+    n_idx = np.repeat(np.arange(N), M)
+    i_idx = np.tile(np.repeat(np.arange(OH), OW), N)
+    j_idx = np.tile(np.tile(np.arange(OW), OH), N)
+    flat = grad_cols.reshape(N * M, kh * kw, C)
+    for i in range(kh):
+        for j in range(kw):
+            np.add.at(want, (n_idx, i_idx * sh + i, j_idx * sw + j, slice(None)),
+                      flat[:, i * kw + j, :])
+
+    got = np.zeros((N, Hp, Wp, C))
+    _kernels.col2im(grad_cols, got, kh, kw, sh, sw)
+    # accumulation order differs (rows vs kernel offsets): ~1 ulp
+    np.testing.assert_allclose(got, want, rtol=1e-12, atol=1e-12)
+
+
+def test_maxpool_forward_matches_numpy():
+    rng = np.random.RandomState(16)
+    x = rng.randn(3, 8, 8, 2)
+    ph = pw = 2
+    sh = sw = 2
+    win = np.lib.stride_tricks.sliding_window_view(x, (ph, pw), axis=(1, 2))[:, ::sh, ::sw]
+    win = win.transpose(0, 1, 2, 4, 5, 3)
+    N, OH, OW, _, _, C = win.shape
+    want = np.max(win, axis=(3, 4))
+    want_amax = np.argmax(win.reshape(N, OH, OW, ph * pw, C), axis=3)
+    got, got_amax = _kernels.maxpool_forward(x, ph, pw, sh, sw)
+    np.testing.assert_allclose(got, want, rtol=1e-12, atol=1e-12)
+    np.testing.assert_array_equal(got_amax, want_amax)
+
+
+def test_maxpool_forward_nan_semantics():
+    """np.max propagates NaN and np.argmax picks the first NaN position."""
+    x = np.zeros((2, 4, 4, 1))
+    x[0, 1, 1, 0] = np.nan
+    win = np.lib.stride_tricks.sliding_window_view(x, (2, 2), axis=(1, 2))[:, ::2, ::2]
+    win = win.transpose(0, 1, 2, 4, 5, 3)
+    N, OH, OW, _, _, C = win.shape
+    want = np.max(win, axis=(3, 4))
+    want_amax = np.argmax(win.reshape(N, OH, OW, 4, C), axis=3)
+    got, got_amax = _kernels.maxpool_forward(x, 2, 2, 2, 2)
+    np.testing.assert_allclose(got, want, rtol=1e-12, atol=1e-12, equal_nan=True)
+    np.testing.assert_array_equal(got_amax, want_amax)
+
+
+def test_maxpool_backward_matches_numpy_scatter():
+    rng = np.random.RandomState(17)
+    x = rng.randn(2, 5, 5, 2)
+    ph = pw = 2
+    sh = sw = 1          # overlapping windows: contributions accumulate
+    out, amax = _kernels.maxpool_forward(x, ph, pw, sh, sw)
+    grad = rng.randn(*out.shape)
+
+    # the pure np.add.at scatter from MaxPool2D.backward
+    N, OH, OW, C = grad.shape
+    want = np.zeros_like(x)
+    n_idx, i_idx, j_idx, c_idx = np.meshgrid(
+        np.arange(N), np.arange(OH), np.arange(OW), np.arange(C), indexing='ij')
+    h_abs = i_idx * sh + amax // pw
+    w_abs = j_idx * sw + amax % pw
+    np.add.at(want, (n_idx.ravel(), h_abs.ravel(), w_abs.ravel(), c_idx.ravel()),
+              grad.ravel())
+
+    got = np.zeros_like(x)
+    _kernels.maxpool_backward(grad, amax, got, ph, pw, sh, sw)
+    # same accumulation order here, but keep the ~1 ulp tolerance
+    np.testing.assert_allclose(got, want, rtol=1e-12, atol=1e-12)
+
+
+def test_conv_kernels_reject_float32():
+    with pytest.raises(ValueError):
+        _kernels.col2im(np.ones((4, 4), dtype=np.float32),
+                        np.zeros((1, 4, 4, 1)), 2, 2, 1, 1)
+    with pytest.raises(ValueError):
+        _kernels.maxpool_forward(np.ones((2, 4, 4, 1), dtype=np.float32), 2, 2, 2, 2)
+
+
+# ---------------------------------------------------------------------------
 # Guard rails
 # ---------------------------------------------------------------------------
 

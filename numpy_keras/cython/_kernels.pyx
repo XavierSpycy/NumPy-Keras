@@ -492,3 +492,135 @@ def adadelta_update(cnp.ndarray p, cnp.ndarray g, cnp.ndarray ags, cnp.ndarray a
         t = delta * delta                   # round 16 (np.square(delta))
         t *= (1.0 - rho)                    # round 17
         dv[i] += t                          # round 18
+
+
+# ---------------------------------------------------------------------------
+# Convolution kernels (col2im / max pooling).
+#
+# im2col itself is NOT compiled: building the column matrix is a strided
+# copy that NumPy's sliding_window_view + reshape already perform at memcpy
+# speed, and a plain C loop cannot beat it.  The column layout matches the
+# pure NumPy im2col in layers/conv2d.py: each row of ``cols`` orders its
+# kh * kw * C entries as (kh, kw, C), so ``cols @ W.reshape(kh * kw * C, F)``
+# receives bit-identical inputs in both modes.  col2im accumulates with +=
+# in row order; the pure implementation scatters with np.add.at in
+# kernel-offset order, so the two agree to ~1 ulp (parity tests use
+# rtol=1e-12).
+# ---------------------------------------------------------------------------
+
+def col2im(cnp.ndarray cols, cnp.ndarray grad_padded, int kh, int kw, int sh, int sw):
+    """Scatter-add the column-space gradient back onto the padded image.
+
+    cols: (N * OH * OW, kh * kw * C) float64; grad_padded: (N, Hp, Wp, C)
+    float64, allocated as zeros by the caller -- contributions accumulate
+    with +=, so it must start at zero.
+    """
+    if cols.dtype != np.float64 or cols.ndim != 2:
+        raise ValueError("col2im requires 2D float64 cols")
+    if grad_padded.dtype != np.float64 or grad_padded.ndim != 4:
+        raise ValueError("col2im requires 4D float64 grad_padded")
+    if not (cols.flags.c_contiguous and grad_padded.flags.c_contiguous):
+        raise ValueError("col2im requires C-contiguous arrays")
+    cdef double[:, ::1] Cv = cols
+    cdef double[:, :, :, ::1] Gv = grad_padded
+    cdef Py_ssize_t N = Gv.shape[0], Hp = Gv.shape[1], Wp = Gv.shape[2], C = Gv.shape[3]
+    cdef Py_ssize_t OH = (Hp - kh) // sh + 1
+    cdef Py_ssize_t OW = (Wp - kw) // sw + 1
+    cdef Py_ssize_t K = kh * kw * C
+    # flat pointers: both arrays are C-contiguous
+    cdef const double* cp = &Cv[0, 0]
+    cdef double* gp = &Gv[0, 0, 0, 0]
+    cdef const double* col_row
+    cdef Py_ssize_t n, i, j, ii, jj, c, m, k, base
+    m = 0
+    for n in range(N):
+        for i in range(OH):
+            for j in range(OW):
+                col_row = cp + m * K
+                k = 0
+                for ii in range(kh):
+                    base = ((n * Hp + i * sh + ii) * Wp + j * sw) * C
+                    for jj in range(kw):
+                        for c in range(C):
+                            gp[base + jj * C + c] += col_row[k]
+                            k += 1
+                m += 1
+
+
+def maxpool_forward(cnp.ndarray x, int ph, int pw, int sh, int sw):
+    """Max pooling, caching the winning in-window index for the backward pass.
+
+    x: (N, Hp, Wp, C) float64; returns (out, amax) with out (N, OH, OW, C)
+    float64 and amax (N, OH, OW, C) int64 -- the flat row-major index of the
+    maximum inside each window.  NaN propagates like np.max: a NaN window
+    yields NaN, and its argmax is the first NaN position.
+    """
+    if x.dtype != np.float64 or x.ndim != 4:
+        raise ValueError("maxpool_forward requires 4D float64 input")
+    if not x.flags.c_contiguous:
+        raise ValueError("maxpool_forward requires a C-contiguous input")
+    cdef double[:, :, :, ::1] Xv = x
+    cdef Py_ssize_t N = Xv.shape[0], Hp = Xv.shape[1], Wp = Xv.shape[2], C = Xv.shape[3]
+    cdef Py_ssize_t OH = (Hp - ph) // sh + 1
+    cdef Py_ssize_t OW = (Wp - pw) // sw + 1
+    if OH <= 0 or OW <= 0:
+        raise ValueError("maxpool_forward: input is smaller than the pool")
+    cdef cnp.ndarray out = np.empty((N, OH, OW, C), dtype=np.float64)
+    cdef cnp.ndarray amax = np.empty((N, OH, OW, C), dtype=np.int64)
+    # flat pointers: x is C-contiguous; out/amax are freshly allocated
+    cdef const double* xp = &Xv[0, 0, 0, 0]
+    cdef double[:, :, :, ::1] Ov = out
+    cdef long long[:, :, :, ::1] Av = amax
+    cdef Py_ssize_t n, i, j, c, ii, jj, k, best, base
+    cdef double best_val, v
+    for n in range(N):
+        for i in range(OH):
+            for j in range(OW):
+                for c in range(C):
+                    best = 0
+                    best_val = xp[((n * Hp + i * sh) * Wp + j * sw) * C + c]
+                    k = 0
+                    for ii in range(ph):
+                        base = ((n * Hp + i * sh + ii) * Wp + j * sw) * C + c
+                        for jj in range(pw):
+                            v = xp[base + jj * C]
+                            if v != v:              # NaN: wins the first time only
+                                if best_val == best_val:
+                                    best_val = v
+                                    best = k
+                            elif v > best_val:
+                                best_val = v
+                                best = k
+                            k += 1
+                    Ov[n, i, j, c] = best_val
+                    Av[n, i, j, c] = best
+    return out, amax
+
+
+def maxpool_backward(cnp.ndarray grad, cnp.ndarray amax, cnp.ndarray grad_padded,
+                     int ph, int pw, int sh, int sw):
+    """Scatter each output gradient onto the winning input position.
+
+    grad: (N, OH, OW, C) float64; amax: (N, OH, OW, C) int64 from
+    maxpool_forward; grad_padded: (N, Hp, Wp, C) zeros allocated by the
+    caller -- overlapping windows accumulate with +=.
+    """
+    if grad.dtype != np.float64 or grad.ndim != 4:
+        raise ValueError("maxpool_backward requires 4D float64 grad")
+    if amax.dtype != np.int64 or amax.ndim != 4:
+        raise ValueError("maxpool_backward requires 4D int64 amax")
+    if grad_padded.dtype != np.float64 or grad_padded.ndim != 4:
+        raise ValueError("maxpool_backward requires 4D float64 grad_padded")
+    if not (grad.flags.c_contiguous and grad_padded.flags.c_contiguous):
+        raise ValueError("maxpool_backward requires C-contiguous arrays")
+    cdef double[:, :, :, ::1] Gv = grad
+    cdef long long[:, :, :, ::1] Av = amax
+    cdef double[:, :, :, ::1] Pv = grad_padded
+    cdef Py_ssize_t N = Gv.shape[0], OH = Gv.shape[1], OW = Gv.shape[2], C = Gv.shape[3]
+    cdef Py_ssize_t n, i, j, c, k
+    for n in range(N):
+        for i in range(OH):
+            for j in range(OW):
+                for c in range(C):
+                    k = Av[n, i, j, c]
+                    Pv[n, i * sh + k // pw, j * sw + k % pw, c] += Gv[n, i, j, c]
