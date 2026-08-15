@@ -33,9 +33,25 @@ class BatchNormalization(object):
         self.__moving_variance_initializer = moving_variance_initializer
 
         self.__initializer = _InitializerMapper()
+        self.__input_shape = None   # (..., C), set when the model is built
+
+    def set_input_shape(
+            self,
+            shape,
+        ) -> None:
+
+        """
+        Set the input shape. Batch normalization is per-channel, so gamma
+        and beta have the size of the last (channel) axis.
+
+        Parameters:
+        - shape (tuple): The input shape without the batch axis.
+        """
+
+        self.__input_shape = tuple(shape)
 
     def init_params(
-            self, 
+            self,
             input_dim: int,
         ) -> None:
 
@@ -49,14 +65,20 @@ class BatchNormalization(object):
         self.params = {}
         self.grads = {}
 
-        self.params['gamma'] = self.__initializer[self.__gamma_initializer]()((input_dim,))
-        self.params['beta'] = self.__initializer[self.__beta_initializer]()((input_dim,))
+        # per-channel parameters: for a 2D input (N, D) the "channels" are
+        # the D features; for a 4D input (N, H, W, C) they are the C channels
+        n_features = input_dim
+        if self.__input_shape is not None and len(self.__input_shape) > 1:
+            n_features = self.__input_shape[-1]
+
+        self.params['gamma'] = self.__initializer[self.__gamma_initializer]()((n_features,))
+        self.params['beta'] = self.__initializer[self.__beta_initializer]()((n_features,))
 
         self.grads['gamma'] = np.zeros_like(self.params['gamma'])
         self.grads['beta'] = np.zeros_like(self.params['beta'])
 
-        self.moving_mean = self.__initializer[self.__moving_mean_initializer]()((input_dim,))
-        self.moving_variance = self.__initializer[self.__moving_variance_initializer]()((input_dim,))
+        self.moving_mean = self.__initializer[self.__moving_mean_initializer]()((n_features,))
+        self.moving_variance = self.__initializer[self.__moving_variance_initializer]()((n_features,))
         
         self.__output_dim = input_dim
     
@@ -76,10 +98,14 @@ class BatchNormalization(object):
         - outputs (np.ndarray): The outputs of the layer.
         """
         
+        # mean and variance over the batch and all spatial axes, leaving the
+        # per-channel axis last: axis 0 for 2D inputs, (0, 1, 2) for 4D
+        reduce_axis = tuple(range(inputs.ndim - 1))
+
         # If the layer is in training mode, compute the outputs using batch normalization
         if is_training:
-            batch_mean = np.mean(inputs, axis=0)
-            batch_var = np.var(inputs, axis=0)
+            batch_mean = np.mean(inputs, axis=reduce_axis)
+            batch_var = np.var(inputs, axis=reduce_axis)
             self.xmu = inputs - batch_mean
             self.ivar = 1. / np.sqrt(batch_var + self.epsilon)
             self.x_normalized = self.xmu * self.ivar
@@ -106,15 +132,16 @@ class BatchNormalization(object):
         - delta (np.ndarray): The delta of the layer.
         """
         
-        N, _ = delta.shape
+        N = delta.shape[0]
+        reduce_axis = tuple(range(delta.ndim - 1))
         # Compute the gradients of weights and biases
-        self.grads['gamma'] = np.sum(delta * self.x_normalized, axis=0)
-        self.grads['beta'] = np.sum(delta, axis=0)
+        self.grads['gamma'] = np.sum(delta * self.x_normalized, axis=reduce_axis)
+        self.grads['beta'] = np.sum(delta, axis=reduce_axis)
         # Normalize the delta
         dx_normalized = delta * self.params['gamma']
         # Compute the delta of mean and variance
-        dvar = np.sum(dx_normalized * self.xmu * -0.5 * np.power(self.ivar, 3), axis=0)
-        dmean = np.sum(dx_normalized * -self.ivar, axis=0) + dvar * np.mean(-2. * self.xmu, axis=0)
+        dvar = np.sum(dx_normalized * self.xmu * -0.5 * np.power(self.ivar, 3), axis=reduce_axis)
+        dmean = np.sum(dx_normalized * -self.ivar, axis=reduce_axis) + dvar * np.mean(-2. * self.xmu, axis=reduce_axis)
         dx = dx_normalized * self.ivar + dvar * 2. * self.xmu / N + dmean / N
         return dx
     
@@ -129,6 +156,10 @@ class BatchNormalization(object):
     @property
     def output_dim(self):
         return self.__output_dim
+
+    @property
+    def output_shape(self):
+        return self.__input_shape
     
     def __str__(self):
         return f"BatchNormalization(momentum={self.__momentum}, epsilon={self.__epsilon})"

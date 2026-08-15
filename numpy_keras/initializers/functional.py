@@ -17,14 +17,27 @@ def ones(shape: Tuple[int, int]) -> np.ndarray:
 def zeros(shape: Tuple[int, int]) -> np.ndarray:
     return np.zeros(shape)
 
+def _fan_in(shape: Tuple[int, ...]) -> int:
+    """Number of inputs a neuron receives: all axes but the last.
+
+    For a Dense kernel (in, out) this is `in`; for a Conv2D kernel
+    (kh, kw, in_channels, filters) it is kh * kw * in_channels."""
+    return int(np.prod(shape[:-1]))
+
+def _fan_out(shape: Tuple[int, ...]) -> int:
+    """Number of outputs a neuron feeds: all axes but the first."""
+    return int(np.prod(shape[1:]))
+
 def xaiver_uniform(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
-    return gain * np.random.uniform(low=-np.sqrt(6 / (shape[0] + shape[1])), high=np.sqrt(6 / (shape[0] + shape[1])), size=shape)
+    return gain * np.random.uniform(low=-np.sqrt(6 / (_fan_in(shape) + _fan_out(shape))), high=np.sqrt(6 / (_fan_in(shape) + _fan_out(shape))), size=shape)
 
 def xaiver_normal(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
-    return gain * np.random.normal(loc=0.0, scale=np.sqrt(2 / (shape[0] + shape[1])), size=shape)
+    return gain * np.random.normal(loc=0.0, scale=np.sqrt(2 / (_fan_in(shape) + _fan_out(shape))), size=shape)
 
 def kaiming_uniform(shape: Tuple[int, int], mode: str = 'fan_in') -> np.ndarray:
-    return np.random.uniform(low=-np.sqrt(3/(shape[0] if mode == 'fan_in' else shape[1])), high=np.sqrt(3/(shape[0] if mode == 'fan_in' else shape[1])), size=shape)
+    fan = _fan_in(shape) if mode == 'fan_in' else _fan_out(shape)
+    return np.random.uniform(low=-np.sqrt(3/fan), high=np.sqrt(3/fan), size=shape)
 
 def kaiming_normal(shape: Tuple[int, int], mode: str = 'fan_in') -> np.ndarray:
-    return np.random.normal(loc=0.0, scale=np.sqrt(1/(shape[0] if mode == 'fan_in' else shape[1])), size=shape)
+    fan = _fan_in(shape) if mode == 'fan_in' else _fan_out(shape)
+    return np.random.normal(loc=0.0, scale=np.sqrt(1/fan), size=shape)

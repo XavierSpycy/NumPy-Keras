@@ -185,23 +185,24 @@ print(f"Accuracy on the test set: {model.evaluate(X_test, y_test):.2%}")
 只要版本没有太大的差异, 我们相信这个库应该可以在其他版本上正常运行。
 
 ### 2.1 可选的 Cython 加速
-默认情况下, 本库完全基于纯 NumPy 运行。如果您希望加速训练与推理, 可以编译可选的 Cython 内核 (优化器更新对每个参数数组做单趟融合计算、`Dense` 层的偏置/激活函数融合、编译版逐元素激活函数):
+默认情况下, 本库完全基于纯 NumPy 运行。如果您希望加速训练与推理, 可以编译可选的 Cython 内核 (优化器更新对每个参数数组做单趟融合计算、`Dense` 层的偏置/激活函数融合、编译版逐元素激活函数、以及卷积层使用的 `col2im` 散射与最大池化内核):
 
 ```
 pip install cython>=3.0.10
 python build_cython.py build_ext --inplace
 ```
 
-库在导入时会自动检测编译产物并使用; 未编译时 (或设置了环境变量 `NUMPY_KERAS_DISABLE_CYTHON` 时), 自动回退到纯 NumPy 实现, 行为完全一致。两条路径通过一致性测试 (`tests/test_cython_kernels.py`) 互相校验, `benchmarks/bench_cython.py` 用于测量加速比。
+库在导入时会自动检测编译产物并使用; 未编译时 (或设置了环境变量 `NUMPY_KERAS_DISABLE_CYTHON` 时), 自动回退到纯 NumPy 实现, 行为完全一致。两条路径通过一致性测试 (`tests/test_cython_kernels.py`) 互相校验, `benchmarks/bench_cython.py` 用于测量加速比。对于 CNN, `im2col` 本身有意**不**编译——列矩阵的构造本质是一次跨步拷贝, NumPy 已经以 memcpy 级别的速度完成——但反向的散射累加 (`col2im`, 单个 batch 上约 16x) 与最大池化的窗口扫描 (约 2.7x) 是编译的, 卷积的矩阵乘法与激活函数则直接复用融合的 `Dense` 内核。
 
-下表由 `python benchmarks/bench_cython.py` 生成 (每个单元格重复 5 次, 取均值 ± 标准差; 两种模式在同一会话中测得)。两种模式均包含纯 Python 热路径修复 (跳过无 metrics 时的全量预测、缓存激活函数查找), 因此表中的加速比仅来自 Cython 层。
+下表由 `python benchmarks/bench_cython.py` 生成 (MLP 两行: 重复 5 次; CNN 行: 重复 3 次; 取均值 ± 标准差; 两种模式在同一会话中测得)。两种模式均包含纯 Python 热路径修复 (跳过无 metrics 时的全量预测、缓存激活函数查找), 因此表中的加速比仅来自 Cython 层。
 
 | 配置 | 纯 NumPy | Cython | 加速比 |
 |---|---|---|---|
 | 教学规模 3000x64, 隐层 [128, 64, 1], 5 epochs, batch 32 | 0.195s ± 0.021 | 0.136s ± 0.001 | ~1.4x |
 | MNIST 规模 10000x784, 隐层 [256, 256, 10], 3 epochs, batch 64 | 25.16s ± 2.24 | 19.15s ± 1.32 | ~1.3x |
+| LeNet 风格 CNN (6@5x5 / 池化 / 16@5x5 / 池化 / 120 / 10), 2000x28x28 MNIST, 2 epochs, batch 32 | 14.47s ± 0.66 | 8.69s ± 0.30 | ~1.7x |
 
-测试环境: Apple M2 Pro (Mac14,9, 16 GB 内存, macOS arm64), Python 3.12.8, NumPy 1.26.4。加速比取决于 CPU、BLAS 实现与矩阵规模, 请勿期望在其他机器上得到完全相同的数字。绝对耗时尤其容易受并发负载影响——BLAS 密集型任务受影响最大 (同一台机器在空闲窗口下, 同一脚本测得 MNIST 配置约为 2.5s 对 4.1s), 而加速比在不同负载下保持在 ~1.3-1.6x 区间。建议在自己的机器上重新运行 benchmark 后再下结论。
+测试环境: Apple M2 Pro (Mac14,9, 16 GB 内存, macOS arm64), Python 3.12.8, NumPy 1.26.4。加速比取决于 CPU、BLAS 实现与矩阵规模, 请勿期望在其他机器上得到完全相同的数字。绝对耗时尤其容易受并发负载影响——BLAS 密集型任务受影响最大 (同一台机器在空闲窗口下, 同一脚本测得 MNIST 配置约为 2.5s 对 4.1s), 而加速比在不同负载下保持在 ~1.3-1.6x 区间。建议在自己的机器上重新运行 benchmark 后再下结论。两种模式的训练轨迹基本一致: 上述 CNN 配置训练两个 epoch 后, 两种模式的 loss 与准确率在小数点后四位完全相同。
 
 ## :sparkles: 3. 其他数据集上的测试
 或许看到这里您会有一个疑问: 我们只在 MNIST 数据集上进行了测试, 从准确率上来看, 我们的模型表现得非常好。但是, 有没有可能是因为我们的模型在 MNIST 数据集上过拟合了呢? 那么在其他数据集上的表现如何呢?
@@ -594,12 +595,55 @@ import numpy_keras.autograd as keras
 - **[Flatten](numpy_keras/layers/flatten.py)**:
   - 展平层 (Flatten Layer)
   - **定义**:
-    展平层是一个用于神经网络中的层，它将输入数据展平为一个向量。这个层通常用于将多维张量展平为一个向量，以便于连接到一个全连接层。
+    展平层是一个用于神经网络中的层，它将输入数据展平为一个向量。这个层通常用于将多维张量展平为一个向量，以便于连接到一个全连接层。输入形状会自动从前一层推断 (`layers.Flatten()`), 也可以手动显式传入。
+
+- **[Conv2D](numpy_keras/layers/conv2d.py)**:
+  - 二维卷积层 (2D Convolutional Layer)
+  - **定义**:
+    二维卷积层: 每个滤波器在输入图像上滑动并产生一张特征图。采用经典的 **im2col** 技巧 (CS231n 风格) 实现: 每个 kh × kw × C 的感受野被重排为矩阵的一行, 于是整个卷积变成一次矩阵乘法 `cols(X) @ W_flat`, 由 BLAS 完成; 反向传播则通过散射累加 (`col2im`) 逆操作。
+  - **数学表示**:    
+    对于形状为 (kh, kw, C) 的滤波器 $W$、偏置 $b$ 与感受野 $x$: $y_{i,j} = f(\Sigma_{p,q,c} W_{p,q,c} x_{i+p, j+q, c} + b)$
+  - 支持 `kernel_size`、`stride`、`padding` (整数或 `'same'`)、`activation` 与 `use_bias`; 参数字典中权重形状为 `(kh, kw, in_channels, filters)`, 偏置为 `(filters,)`。
+
+- **[MaxPool2D](numpy_keras/layers/maxpool2d.py)**:
+  - 二维最大池化层 (2D Max Pooling Layer)
+  - **定义**:
+    最大池化通过对每个池化窗口取最大值来对特征图进行下采样; 反向传播将每个梯度送回窗口中胜出的输入位置 (使用 `np.add.at` 累加, 因为重叠窗口会共享像素)。
 
 - **[Input](numpy_keras/layers/input.py)**:
   - 输入层 (Input Layer)
   - **定义**:
-    输入层是神经网络的第一层，它接收输入数据并将其传递到下一层。输入层的节点数通常等于输入数据的特征数。
+    输入层是神经网络的第一层，它接收输入数据并将其传递到下一层。输入层的节点数通常等于输入数据的特征数。它接受一个整数 (该长度的一维特征向量) 或完整形状元组, 例如 `(28, 28, 1)`。
+
+使用自带的 MNIST 子集 (`data/mnist_train_small.csv`) 构建一个 LeNet 风格的 CNN, 写法与上面的 MLP 完全一致:
+
+```python
+import csv
+import numpy as np
+from numpy_keras import Sequential
+from numpy_keras import layers
+
+with open("data/mnist_train_small.csv") as f:
+    rows = list(csv.reader(f))
+X = np.array([[float(v) for v in r[1:]] for r in rows]) / 255.0
+y = np.array([int(r[0]) for r in rows])
+X = X.reshape(-1, 28, 28, 1)             # (N, H, W, C)
+
+model = Sequential()
+model.add(layers.Input((28, 28, 1)))
+model.add(layers.Conv2D(6, kernel_size=5, activation="relu"))
+model.add(layers.MaxPool2D(pool_size=2))
+model.add(layers.Conv2D(16, kernel_size=5, activation="relu"))
+model.add(layers.MaxPool2D(pool_size=2))
+model.add(layers.Flatten())
+model.add(layers.Dense(120, activation="tanh"))
+model.add(layers.Dense(10, activation="softmax"))
+model.compile(loss="sparse_categorical_crossentropy", optimizer="adam",
+              metrics=["accuracy"])
+
+history = model.fit(X, y, batch_size=32, epochs=2, shuffle=True)
+# 2000 个样本训练 2 个 epoch 后训练集准确率约为 93%
+```
 
 ### 4.3 优化器 (Optimizers)
 在这里, 我们实现了初学者常用的优化器, 以便于更好地使用。我们认为这些优化器非常有助于初学者理解深度学习的优化过程。

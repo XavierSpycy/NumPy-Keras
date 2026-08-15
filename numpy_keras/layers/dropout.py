@@ -20,6 +20,7 @@ class Dropout:
             raise ValueError("Dropout rate must be in the range [0, 1).")
         
         self.__rate = rate
+        self.__input_shape = None
     
     def forward(
             self, 
@@ -73,10 +74,26 @@ class Dropout:
         """
         
         self.__output_dim = input_dim
-    
+
+    def set_input_shape(
+            self,
+            shape,
+        ) -> None:
+
+        """
+        Set the input shape. Dropout is elementwise, so the shape is passed
+        through unchanged for the next layer.
+        """
+
+        self.__input_shape = shape
+
     @property
     def output_dim(self) -> int:
         return self.__output_dim
+
+    @property
+    def output_shape(self):
+        return self.__input_shape
     
     def __str__(self):
         return f"Dropout(rate={self.__rate})"

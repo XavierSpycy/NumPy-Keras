@@ -28,12 +28,14 @@ class Sequential:
             self, 
             layers: List[
                 Union[
-                    layers.Activation, 
+                    layers.Activation,
                     layers.BatchNormalization,
+                    layers.Conv2D,
                     layers.Dense,
                     layers.Dropout,
                     layers.Flatten,
                     layers.Input,
+                    layers.MaxPool2D,
                 ]
             ] = [],
         ) -> None:
@@ -292,7 +294,10 @@ class Sequential:
 
         for layer_name, layer in self.layers.items():
             params = np.sum([np.prod(v.shape) for v in layer.params.values()]) if hasattr(layer, 'params') else 0
-            output_shape = layer.output_dim if hasattr(layer, 'output_dim') else 'N/A'
+            if hasattr(layer, 'output_shape') and layer.output_shape is not None:
+                output_shape = layer.output_shape
+            else:
+                output_shape = layer.output_dim if hasattr(layer, 'output_dim') else 'N/A'
             print(f"{layer_name:<20} {str(output_shape):<20} {params:<10,}")
 
             total_params += params
@@ -306,9 +311,14 @@ class Sequential:
         ) -> None:
 
         output_dim = None
+        output_shape = None
         prev_layer_activation = None
         prev_layer_activation_config = {}
         for layer in self.layers.values():
+            # 4D-aware layers (Conv2D, MaxPool2D, ...) need the full input
+            # shape; the scalar output_dim is not enough for them.
+            if output_shape is not None and hasattr(layer, 'set_input_shape'):
+                layer.set_input_shape(output_shape)
             if output_dim and hasattr(layer, 'init_params'):
                 layer.init_params(output_dim)
             if hasattr(layer, 'set_activation_deriv'):
@@ -318,6 +328,7 @@ class Sequential:
             prev_layer_activation = layer.activation if hasattr(layer, 'activation') else prev_layer_activation
             prev_layer_activation_config = layer.activation_config if hasattr(layer, 'activation_config') else prev_layer_activation_config
             output_dim = layer.output_dim
+            output_shape = getattr(layer, 'output_shape', None)
     
     def __criterion(
             self,
