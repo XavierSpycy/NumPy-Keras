@@ -34,8 +34,11 @@ class Sequential:
                     layers.Dense,
                     layers.Dropout,
                     layers.Flatten,
+                    layers.GRU,
                     layers.Input,
+                    layers.LSTM,
                     layers.MaxPool2D,
+                    layers.SimpleRNN,
                 ]
             ] = [],
         ) -> None:
@@ -345,7 +348,11 @@ class Sequential:
         # softmax the loss grad already includes the activation
         # (d softmax+CE / d logits), and no softmax_deriv exists.
         last_layer = next(reversed(self.layers.values()))
-        if hasattr(last_layer, 'activation'):
+        # RNN layers (SimpleRNN/LSTM/GRU) return activation=None: their
+        # output chain is handled inside backward (the hidden state also
+        # feeds the recurrence, so it must be), and the generic chain --
+        # which applies to Dense/Conv2D -- must skip them.
+        if hasattr(last_layer, 'activation') and last_layer.activation is not None:
             try:
                 activation_deriv = _ActivationMapper()[last_layer.activation + '_deriv']
             except ValueError:
