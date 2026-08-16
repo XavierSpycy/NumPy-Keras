@@ -533,9 +533,9 @@ history = model.fit(X_train, y_train, epochs=60, batch_size=128, verbose=1, call
 ```
 
 - 性能 (10,000 样本子集, `np.random.seed(42)`, 编译内核, Apple M2 Pro)
-  - 准确率 (训练集): 59.75%
-  - 准确率 (测试集): 45.71%
-- 早停轮次: 46
+  - 准确率 (训练集): 59.13%
+  - 准确率 (测试集): 45.79%
+- 早停轮次: 42
 
 ##### 测试集作为验证集
 
@@ -669,7 +669,7 @@ import numpy_keras.autograd as keras
   - 支持 `activation` (候选, 默认 `'tanh'`)、`recurrent_activation` (门, 默认 `'sigmoid'`)、`return_sequences`、`use_bias`; 参数形状为 `(F, 3U)`、`(U, 3U)` 与 `(3U,)`。
 
 > [!NOTE]
-> RNN 层完全自行处理输出链: 它们的 `activation` 属性返回 `None` (SimpleRNN 也不例外), 激活函数的导数在每个时间步的 `backward` 内部应用 —— 隐状态同时也馈入循环, 因此这条链本就只能在层内完成。通用的逐元素求导约定 (由*下一层*应用) 只适用于 Dense/Conv2D/Activation。此外, `return_sequences=True` 的 RNN 输出形状为 `(N, T, U)`, 其后的 `Dense` 中间需要 `Flatten` (否则模型会给出明确的报错提示)。RNN 层为纯 NumPy 实现 —— 没有 Cython 内核, 因为每个时间步的工作本身就是 BLAS 矩阵乘法 (见 §2.1)。
+> 每个层都在自己的 `backward` 里穿过**自己**的激活函数 (导数在缓存的后激活输出上取值); criterion 只计算损失及其原始梯度。RNN 层的输出不是单一逐元素激活, 其门与候选的导数在每个时间步的 `backward` 内部应用, 而 `activation` 属性只是返回 `None` 的自省标记。此外, `return_sequences=True` 的 RNN 输出形状为 `(N, T, U)`, 其后的 `Dense` 中间需要 `Flatten` (否则模型会给出明确的报错提示)。RNN 层为纯 NumPy 实现 —— 没有 Cython 内核, 因为每个时间步的工作本身就是 BLAS 矩阵乘法 (见 §2.1)。
 
 - **[Input](numpy_keras/layers/input.py)**:
   - 输入层 (Input Layer)
@@ -799,6 +799,7 @@ history = model.fit(X, y, batch_size=32, epochs=10, shuffle=True)
     - 2026.08.15
       - **feat**: 新增 RNN 层族 — `SimpleRNN`、`LSTM` 与 `GRU` (纯 NumPy BPTT)。
       - **feat**: 在 `tutorials/` 新增中文教程系列 (快速上手、激活函数、损失函数、反向传播、优化器、学习率、MLP 等)。
+      - **refactor**: 每个层现在都在自己的 `backward` 里穿过自己的激活函数 (criterion 只计算损失与原始梯度) —— 语义更简单, BN/Dropout/自定义层在构造上即正确。softmax 层自行处理其雅可比。
       - **fix**: 修正 He (kaiming) 初始化的尺度与 SGD 的 Nesterov 更新。
       - **build**: 修复 `pyproject.toml` 的包发现, 并文档化 `pip install -e .`。
-      - **test**: 新增初始化器回归测试, 测试套件现包含 241 个测试。
+      - **test**: 新增初始化器回归测试, 测试套件现包含 244 个测试。

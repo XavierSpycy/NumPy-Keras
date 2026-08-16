@@ -64,7 +64,7 @@ $$h_t = \text{act}(x_t W_{xh} + h_{t-1} W_{hh} + b)$$
 
 1. **梯度只落在最后一个时间步**（`d_out[:, -1, :] = grad`）：默认 `return_sequences=False` 只输出最后的 h_T，损失直接作用在 h_T 上；更早时间步的梯度**只能**通过 `dh = d_pre @ W_hh.T` 这条循环路径流回去——"信息沿时间回传"不是比喻，就是这一行矩阵乘。
 2. **h_prev 在每个迭代开头取**：`t` 时刻的梯度要用 `h_{t-1}`（初始状态是零）。把它放在循环末尾取会错位一格——这类 off-by-one 正是有限差分梯度校验（《反向传播逐行拆解》）的用武之地。
-3. **`activation` 属性刻意返回 `None`**：Dense/Conv2D 遵守"下一层乘我的导数"的通用约定，但 RNN 的隐状态还要喂给循环本身，输出链必须在层内完整走完。所以三个 RNN 层都自持输出链，同时把通用链在层边界处"归零"——这是库里最重要的设计约定之一。
+3. **`activation` 属性返回 `None`**：这是纯自省标记——h_t 不是单一逐元素激活，没有名字可报。门与候选的导数在 backward 里逐时间步应用，与"每层自持激活导数"的通用约定完全一致（《反向传播逐行拆解》讲过：任何层插在任何位置都天然正确，RNN 也不例外）。
 
 ## SimpleRNN 的短板与两个改进
 
@@ -80,13 +80,13 @@ SimpleRNN 的问题：梯度每过一个时间步就要乘一次 W_hh 和激活�
 每张 28×28 的图变成 **28 个时间步 × 28 特征**的序列——从上到下逐行"读"数字。800 训练 / 200 测试，LSTM(32) 与 SimpleRNN(32) 同一配置对比：
 
 ```text
-  SimpleRNN: train_acc=0.6138, val_acc=0.6400
-       LSTM: train_acc=0.7913, val_acc=0.6750
+  SimpleRNN: train_acc=0.6937, val_acc=0.6650
+       LSTM: train_acc=0.8163, val_acc=0.7200
 ```
 
 ![SimpleRNN vs LSTM](assets/10_rnn_compare.png)
 
-LSTM 明显占优：训练 79.13% vs 61.38%，验证 67.50% vs 64.00%。逐行扫描时，"数字 9 的圈在哪些行闭合"这类信息横跨二十多个时间步——SimpleRNN 的隐状态撑不住这么长的依赖，LSTM 的遗忘门让它有选择地保留关键行。同样的数据量下，这是架构差异最直观的展示。
+LSTM 明显占优：训练 81.63% vs 69.37%，验证 72.00% vs 66.50%。逐行扫描时，"数字 9 的圈在哪些行闭合"这类信息横跨二十多个时间步——SimpleRNN 的隐状态撑不住这么长的依赖，LSTM 的遗忘门让它有选择地保留关键行。同样的数据量下，这是架构差异最直观的展示。
 
 最后看一眼 LSTM 扫描一个"9"时隐状态的演化（32 个隐单元 × 28 行像素）：
 
@@ -215,8 +215,8 @@ print("图片已保存: tutorials/assets/10_rnn_compare.png, tutorials/assets/10
 
 ```text
 数据: 训练 (800, 28, 28), 测试 (200, 28, 28)（T=28 时间步, F=28 特征）
-  SimpleRNN: train_acc=0.6138, val_acc=0.6400
-       LSTM: train_acc=0.7913, val_acc=0.6750
+  SimpleRNN: train_acc=0.6937, val_acc=0.6650
+       LSTM: train_acc=0.8163, val_acc=0.7200
 图片已保存: tutorials/assets/10_rnn_compare.png, tutorials/assets/10_hidden_state.png
 ```
 
@@ -225,7 +225,7 @@ print("图片已保存: tutorials/assets/10_rnn_compare.png, tutorials/assets/10
 - RNN = 权值共享 + 循环：`h_t = act(x_t W_xh + h_{t-1} W_hh + b)`，每个时间步同一套权重
 - BPTT 的关键：梯度只落在最后时间步，经 `dh @ W_hh.T` 沿时间回传；每步累积 dW
 - SimpleRNN 扛不住长依赖；LSTM 用遗忘门 + 加法路径让梯度无损流动；GRU 是它的精简版
-- 实测行扫描 MNIST：LSTM 79.13% / 67.50% vs SimpleRNN 61.38% / 64.00%
+- 实测行扫描 MNIST：LSTM 81.63% / 72.00% vs SimpleRNN 69.37% / 66.50%
 - RNN 层 `activation` 属性为 None：输出链自持（隐状态喂循环，链必须在层内走完）
 
 **练习**：把两个模型换成 GRU(32) 再跑一遍，它和 LSTM 差多少？把 `return_sequences=True` 加上、再接一层 LSTM——两层 RNN 堆叠后验证准确率会变吗？

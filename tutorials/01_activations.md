@@ -50,20 +50,26 @@ def tanh_deriv(a):
     return 1 - a ** 2
 ```
 
-tanh'(x) = 1 − tanh²(x) = 1 − a²。写成"a 的函数"之后，**反向传播时直接用缓存的前向输出 a 就能算导数，不需要重新计算 tanh(x)**。这是实现上的刻意设计：层在前向时缓存的是后激活输出，backward 拿到它就能求导。这个约定在本系列《反向传播逐行拆解》里会被反复用到，你会在 `Dense.backward` 里看到这一行：
+tanh'(x) = 1 − tanh²(x) = 1 − a²。写成"a 的函数"之后，**反向传播时直接用缓存的前向输出 a 就能算导数，不需要重新计算 tanh(x)**。这是实现上的刻意设计：层在前向时缓存的是后激活输出，backward 拿到它就能求导。而且**每层只对自己的激活负责**——你在《反向传播逐行拆解》里会看到完整链条，这里先看 `Dense.backward` 的关键几行：
 
 ```python
 # excerpt: numpy_keras/layers/dense.py
-        if self.__activation_deriv:
-            grad *= self.__activation_deriv(self.inputs, **self.__activation_derive_config)
+        # own activation, evaluated on the cached post-activation output:
+        # dz = grad ⊙ f'(y); the parameter gradients use dz, and dx = dz @ W.T
+        grad = self.__activation_mapper.backward(
+            self.__activation, self.output, grad, self.__activation_config)
+        self.grads["W"] = np.dot(self.inputs.T, grad)
+        if "b" in self.grads:
+            self.grads["b"] = np.sum(grad, axis=0)
+        return np.dot(grad, self.params["W"].T)
 ```
 
-`self.inputs` 对 Dense 来说就是上一层激活后的输出——上一层的 `f'(a)` 在自己的输入上取值。每个激活的导数在网络里**恰好被应用一次**，不多不少。
+`self.output` 是本层前向时缓存的激活输出 a——`f'(a)` 就在这上面取值。梯度先乘自己的导数（∂L/∂z = ∂L/∂y ⊙ f'(y)），再用来算 dW/db 并传回上一层。**上一层的激活由上一层自己处理**，每个导数在网络里恰好被应用一次——由构造保证，不需要任何跨层约定。
 
 两个实现细节值得知道：
 
-- **`softmax` 没有导数**：`_ActivationMapper` 里只有 `"softmax": F.softmax`，没有 `softmax_deriv`。原因是 softmax 的雅可比矩阵不是逐元素的——它的正确导数必须和交叉熵损失合在一起才简洁。这是个精心留下的悬念，《损失函数》一篇揭晓。
-- **`linear_deriv` 返回标量 `1`**（而不是全 1 数组）：导数恒为 1，写成标量也成立，链式法则乘它等于没乘，所以库在 `__criterion` 里对 `linear` 直接跳过乘法。
+- **`softmax` 没有逐元素导数**：`_ActivationMapper` 里只有 `softmax` 本身。softmax 的雅可比矩阵不是逐元素的——它由 softmax 层在自己的 backward 里做**雅可比乘积**完成（《损失函数》一篇推导了完整过程并验证）。
+- **`linear_deriv` 返回标量 `1`**（而不是全 1 数组）：导数恒为 1，写成标量也成立，链式法则乘它等于没乘，所以 `mapper.backward` 对 `linear`/`None` 原样返回梯度。
 
 ## 3. 梯度消失：从数学到实验
 
@@ -280,7 +286,7 @@ sigmoid + glorot_uniform 各层激活标准差: 1.00 0.21 0.12 0.12 0.12 0.11 0.
 ## 6. 小结
 
 - 激活函数引入非线性，否则多层网络坍缩成一层
-- 库的约定：**f'(a) 定义在后激活值上**，backward 直接用缓存的前向输出求导；每个导数恰好被应用一次
+- 库的约定：**f'(a) 定义在后激活值上，且由本层自己在 backward 里应用**——每层只对自己的激活负责，每个导数恰好被应用一次（由构造保证）
 - softmax 没有导数——正确写法必须和交叉熵合并，下一篇揭晓
 - 梯度消失有两个面孔：导数上界（sigmoid 0.25）与信号衰减（前向）；relu + He 初始化是标准解药
 - 实验对不上理论时，去读源码——最小实验是检验理解的试金石

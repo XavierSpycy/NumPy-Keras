@@ -6,7 +6,7 @@
 
 说明：
 - 第一部分：从零实现一个库中没有的层（Scale：逐特征可学习缩放），
-  只实现 6 个钩子就接入 Sequential
+  只实现 4 个方法 + 2 个属性就接入 Sequential
 - 第二部分：整模型有限差分梯度校验，证明自定义层的 backward 正确
 - 第三部分：把自定义层放进真实训练跑通
 - 固定种子 np.random.seed(0)，数字可复现
@@ -20,7 +20,6 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 
 import numpy_keras as keras
-from numpy_keras.activations._mapper import _ActivationMapper
 
 np.random.seed(0)
 
@@ -33,27 +32,16 @@ class Scale:
     提供 output_dim / output_shape 两个属性，并把可训练参数放进
     params / grads 字典即可（见正文的契约清单）。
 
-    关键：本层插在带激活的 Dense 之后，必须自己接管"上一层激活的
-    导数"——实现 set_activation_deriv 接收上一层的导数函数、在
-    backward 里于自身输入处应用，并让 activation 属性返回 None
-    使通用链在层边界归零（与 RNN 层同款约定，见正文）。"""
+    每层只对自己的变换负责：backward 只算 dL/ds 与 dL/dx，
+    上一层的激活由上一层自己处理，无需任何额外代码。"""
 
     def __init__(self, initial_scale=1.0):
         self.__initial_scale = initial_scale
         self.__input_shape = None
         self.__output_dim = None
-        self.__prev_deriv = None
-        self.__prev_config = {}
 
     def set_input_shape(self, shape):
         self.__input_shape = tuple(shape)
-
-    def set_activation_deriv(self, prev_activation, prev_config):
-        if prev_activation:
-            self.__prev_deriv = _ActivationMapper()[prev_activation + "_deriv"]
-            self.__prev_config = prev_config
-        else:
-            self.__prev_deriv = None
 
     def init_params(self, input_dim):
         self.__output_dim = input_dim
@@ -65,18 +53,9 @@ class Scale:
         return inputs * self.params["s"]
 
     def backward(self, grad):
-        # 先走完本层的变换链：dL/ds = sum(grad ⊙ x)，dL/dx = grad ⊙ s
+        # dL/ds = sum(grad ⊙ x)，dL/dx = grad ⊙ s —— 本层的变换链到此为止
         self.grads["s"] = np.sum(grad * self.inputs, axis=0)
-        dx = grad * self.params["s"]
-        # 再应用上一层激活的导数（在自身输入处取值）
-        if self.__prev_deriv:
-            dx *= self.__prev_deriv(self.inputs, **self.__prev_config)
-        return dx
-
-    @property
-    def activation(self):
-        # 自持输出链：返回 None，让下一层跳过通用 deriv 链
-        return None
+        return grad * self.params["s"]
 
     @property
     def output_dim(self):

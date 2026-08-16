@@ -42,7 +42,7 @@ BN 是库中少见的**双模式层**，这四条线是精髓：
 
 ## 实验：同一个高学习率，加与不加
 
-8 层 MLP，SGD lr=0.5——对无 BN 的深网来说高到危险，对有 BN 的深网来说稀松平常：
+8 层 MLP，SGD lr=0.7——对无 BN 的深网来说高到危险，对有 BN 的深网来说稀松平常：
 
 ```python
 # excerpt: 对比实验
@@ -50,8 +50,8 @@ histories = {}
 for name, with_bn in [("without BN", False), ("with BN", True)]:
     np.random.seed(0)                    # 同种子、同初始点
     m = build(with_bn)
-    # 无 BN 时高学习率会让前向激活爆炸（inf），relu 会发出 invalid 警告——
-    # 这正是发散本身的信号，压掉警告噪音，发散看 loss=nan 即可
+    # 无 BN 时高学习率让梯度爆炸、预测崩塌（损失停在高位、准确率钉死
+    # 随机水平）——压掉 relu 的 invalid 警告噪音
     with np.errstate(invalid="ignore"):
         h = m.fit(X, y, batch_size=64, epochs=200, verbose=0)
     histories[name] = h
@@ -60,19 +60,19 @@ for name, with_bn in [("without BN", False), ("with BN", True)]:
 ```
 
 ```text
- without BN: 最终 loss=nan, train_acc=0.5000
-    with BN: 最终 loss=0.1095, train_acc=0.9700
+ without BN: 最终 loss=11.6671, train_acc=0.5000
+    with BN: 最终 loss=0.1165, train_acc=0.9675
 ```
 
 ![加与不加 BN 的对比](assets/08_bn_compare.png)
 
-没有 BN 的网络直接**发散**：前向激活一路爆炸成 `inf`，loss 变成 `nan`，准确率钉死在随机水平 0.5——`loss=nan` 是训练里最常见的求救信号，见到它第一反应就是"学习率太大或缺少归一化"。加了 BN 的同一个网络在同样的 lr 下稳稳收敛到 97%。
+没有 BN 的网络直接**崩塌**：loss 停在 11.67 的高位（预测"自信地错"），准确率钉死在随机水平 0.5——训练曲线居高不下、准确率纹丝不动，这是训练里最常见的求救信号，见到它第一反应就是"学习率太大或缺少归一化"。加了 BN 的同一个网络在同样的 lr 下稳稳收敛到 96.75%。
 
 训练结束后看一眼滑动统计量（`evaluate`/`predict` 用的就是它们）：
 
 ```text
-训练 50 轮后，第一个 BN 层的滑动均值（前 5 个通道）: [1.5219 0.2321 0.6539 0.5969 1.1736]
-滑动方差（前 5 个通道）: [4.0394 0.0961 0.69   0.7212 2.8365]
+训练 50 轮后，第一个 BN 层的滑动均值（前 5 个通道）: [1.5397 0.5838 0.854  0.5753 1.2103]
+滑动方差（前 5 个通道）: [4.0889 0.5812 1.0409 0.6995 2.9758]
 ```
 
 它们不是 0 和 1——BN 的输入是 ReLU 的输出（恒 ≥ 0），所以均值是正的、方差随通道各异。这正是"训练统计量"：每个通道的分布被完整记录，推理时据此归一化。
@@ -87,7 +87,7 @@ for name, with_bn in [("without BN", False), ("with BN", True)]:
     python tutorials/code/08_batch_norm.py
 
 说明：
-- 同一个 8 层 MLP 用同一个高学习率（SGD lr=0.5）训练两遍：
+- 同一个 8 层 MLP 用同一个高学习率（SGD lr=0.7）训练两遍：
   一层不加 BN、一层在每层激活后加 BN，对比训练曲线
 - 训练结束后打印 BN 层的滑动均值/方差：训练模式用 batch 统计量，
   推理模式（evaluate/predict）用滑动统计量
@@ -140,7 +140,7 @@ def build(with_bn):
             m.add(keras.layers.BatchNormalization())
     m.add(keras.layers.Dense(2, activation="softmax"))
     m.compile(loss="sparse_categorical_crossentropy",
-              optimizer=keras.optimizers.SGD(learning_rate=0.5),
+              optimizer=keras.optimizers.SGD(learning_rate=0.7),
               metrics=["accuracy"])
     return m
 
@@ -149,8 +149,8 @@ histories = {}
 for name, with_bn in [("without BN", False), ("with BN", True)]:
     np.random.seed(0)                    # 同种子、同初始点
     m = build(with_bn)
-    # 无 BN 时高学习率会让前向激活爆炸（inf），relu 会发出 invalid 警告——
-    # 这正是发散本身的信号，压掉警告噪音，发散看 loss=nan 即可
+    # 无 BN 时高学习率让梯度爆炸、预测崩塌（损失停在高位、准确率钉死
+    # 随机水平）——压掉 relu 的 invalid 警告噪音
     with np.errstate(invalid="ignore"):
         h = m.fit(X, y, batch_size=64, epochs=200, verbose=0)
     histories[name] = h
@@ -160,7 +160,7 @@ for name, with_bn in [("without BN", False), ("with BN", True)]:
 fig, axes = plt.subplots(1, 2, figsize=(11, 4))
 for name in histories:
     axes[0].plot(histories[name]["loss"], label=name)
-axes[0].set_title("Loss (NaN 后曲线中断)")
+axes[0].set_title("Loss")
 axes[0].set_xlabel("Epoch")
 axes[0].legend()
 axes[0].grid(alpha=0.3)
@@ -190,18 +190,18 @@ print("图片已保存: tutorials/assets/08_bn_compare.png")
 
 ```text
 玩具数据: (400, 2), 标签 [0 1]
- without BN: 最终 loss=nan, train_acc=0.5000
-    with BN: 最终 loss=0.1095, train_acc=0.9700
+ without BN: 最终 loss=11.6671, train_acc=0.5000
+    with BN: 最终 loss=0.1165, train_acc=0.9675
 
-训练 50 轮后，第一个 BN 层的滑动均值（前 5 个通道）: [1.5219 0.2321 0.6539 0.5969 1.1736]
-滑动方差（前 5 个通道）: [4.0394 0.0961 0.69   0.7212 2.8365]
+训练 50 轮后，第一个 BN 层的滑动均值（前 5 个通道）: [1.5397 0.5838 0.854  0.5753 1.2103]
+滑动方差（前 5 个通道）: [4.0889 0.5812 1.0409 0.6995 2.9758]
 （evaluate/predict 走推理模式，用的就是这两个统计量而非 batch 统计量）
 图片已保存: tutorials/assets/08_bn_compare.png
 ```
 
 ## 小结
 
-- BN 稳住每层输入的分布，让深层网络敢用高学习率——实测同 lr=0.5：无 BN 发散（loss=nan），有 BN 收敛到 97%
+- BN 稳住每层输入的分布，让深层网络敢用高学习率——实测同 lr=0.7：无 BN 崩塌（loss 11.67、准确率 0.5），有 BN 收敛到 96.75%
 - **双模式是 BN 的灵魂**：训练用 batch 统计量并滑动更新，推理用滑动统计量；`reduce_axis` 让 2D/4D 输入统一按通道归一化
 - γ/β 是可训练参数，把标准化抹掉的表达力还回来
 - 坑：滑动统计量初期（0/1 冷启动）不准确，刚训几轮就 `evaluate` 会明显偏差

@@ -51,18 +51,19 @@ $$L = -\frac{1}{N}\sum_i \sum_c y_{i,c} \log \hat y_{i,c}$$
 
 ## 3. 隐藏的合体：softmax + CE 的梯度
 
-01 篇留了个悬念：`_ActivationMapper` 里没有 `softmax_deriv`。答案藏在 `Sequential.__criterion` 的这段代码里：
+01 篇留了个悬念：`_ActivationMapper` 里没有 `softmax_deriv`。答案与库的层间约定有关：**每层只对自己的激活负责**。criterion 只做两件事——算损失、算损失对预测的原始梯度（`numpy_keras/models/sequential.py`）：
 
 ```python
 # excerpt: numpy_keras/models/sequential.py
-        if hasattr(last_layer, 'activation') and last_layer.activation is not None:
-            try:
-                activation_deriv = _ActivationMapper()[last_layer.activation + '_deriv']
-            except ValueError:
-                activation_deriv = None
+        loss = self.__loss_func(y, y_hat)
+        grad = self.__loss_func.grad(y, y_hat)
+        # Each layer chains through its own activation inside its backward,
+        # so the criterion only computes the loss and its gradient w.r.t.
+        # the network output.
+        return loss, grad
 ```
 
-`__criterion` 对最后一层的激活求导时，如果激活是 softmax，查找 `softmax_deriv` 会抛 `ValueError`，被 except 捕获后**静默跳过**——因为 CE 的 `grad` 返回的已经不是"对 ŷ 的梯度"，而是**已经乘完 softmax 雅可比的合体梯度**。动手验证一下（`np.random.seed(0)`）：
+softmax 层的 backward 拿到 ∂L/∂ŷ 后，用**雅可比乘积**穿回 logits——softmax 没有逐元素导数，这是唯一正确的穿法。动手验证（`np.random.seed(0)`）：
 
 ```python
 # excerpt: 合体梯度验证
@@ -77,22 +78,23 @@ grad_wrt_yhat = -y / np.clip(y_hat, 1e-10, 1 - 1e-10) / y.shape[0]
 J = y_hat[:, :, None] * (np.eye(3)[None, :, :] - y_hat[:, None, :])
 # 链式法则: ∂L/∂z = (∂L/∂ŷ) @ J
 grad_by_chain = np.einsum("bi,bij->bj", grad_wrt_yhat, J)
-# 库直接返回的"合体"梯度
+# 库的两步走：CE 返回对 ŷ 的原始梯度，softmax 层在自己的 backward 里
+# 做雅可比乘积（每层自持激活导数的约定）
 ce = keras.losses.CategoricalCrossEntropy()
-grad_by_lib = ce.grad(y, y_hat)
+grad_by_lib = _ActivationMapper().backward("softmax", y_hat, ce.grad(y, y_hat), {})
 print(f"  链式法则手算 ∂L/∂z = {grad_by_chain[0]}")
-print(f"  库的 CategoricalCrossEntropy.grad = {grad_by_lib[0]}")
+print(f"  库（softmax 层 backward）∂L/∂z = {grad_by_lib[0]}")
 print(f"  两者一致: {np.allclose(grad_by_chain, grad_by_lib)}")
 ```
 
 ```text
   y_hat = softmax(z) = [0.03911257 0.78559703 0.17529039]
   链式法则手算 ∂L/∂z = [ 0.03911257 -0.21440297  0.17529039]
-  库的 CategoricalCrossEntropy.grad = [ 0.03911257 -0.21440297  0.17529039]
+  库（softmax 层 backward）∂L/∂z = [ 0.03911257 -0.21440297  0.17529039]
   两者一致: True
 ```
 
-手推的链条：∂L/∂ŷ = −y/ŷ/N；softmax 的雅可比 J[i,j] = ŷᵢ(δᵢⱼ − ŷⱼ)；两者相乘逐项抵消，化简后 ∂L/∂z = (ŷ − y)/N——**一个"预测减标签"的极简形式**。所以库的 `grad` 直接返回这个合体值（`categorical_crossentropy.py` 里那句 `return (y_pred_clipped - y_true) / y_true.shape[0]`），softmax 的独立导数自然就不需要存在了。这也意味着：**softmax 只能和交叉熵搭配**。softmax + MSE 时，`__criterion` 会静默跳过缺失的导数，梯度是错的。
+手推的链条：∂L/∂ŷ = −y/ŷ/N；softmax 的雅可比 J[i,j] = ŷᵢ(δᵢⱼ − ŷⱼ)；两者相乘逐项抵消，化简后 ∂L/∂z = (ŷ − y)/N——**一个"预测减标签"的极简形式**。所以库不需要 `softmax_deriv`：CE 的 `grad` 只返回原始形式（`categorical_crossentropy.py` 里那句 `return -y_true / y_pred_clipped / N`），softmax 层的 backward 完成剩下的雅可比乘积。这也带来一个语义升级：**softmax 不再必须配交叉熵**——雅可比乘积对任何损失都成立，softmax + MSE 在数学上同样是正确的（只是实践上依然不推荐）。
 
 顺带看数值稳定（脚本第一部分）：`np.exp(1000)` 溢出成 `inf`，但 `softmax([1000,1000,1000])` 平安无事——因为实现里先减了行最大值再 exp，这是 softmax 的标准写法。
 
@@ -150,10 +152,10 @@ MSE 模型前 20 轮**纹丝不动**（准确率钉死在 0.50），而交叉熵
     python tutorials/code/02_losses.py
 
 说明：
-- 第一部分验证 softmax+CE 的"合体梯度"：CE 对 softmax 输出的梯度乘上
-  softmax 的雅可比矩阵，化简后就是 (y_hat - y)/N —— 这正是库里
-  CategoricalCrossEntropy.grad 直接返回的值，也是 softmax 没有
-  独立导数的原因
+- 第一部分验证 softmax+CE 的"合体梯度"：CE 对 softmax 输出的原始梯度
+  乘上 softmax 的雅可比矩阵，化简后就是 (y_hat - y)/N —— 库里由
+  softmax 层在自己的 backward 里做这个雅可比乘积（CE 只返回对 ŷ 的
+  原始梯度），所以 softmax 不需要独立的逐元素导数
 - 第二部分在同一个二分类玩具数据上训练两个同样的单神经元模型，
   一个用 MSE、一个用稀疏交叉熵，对比收敛速度与最终准确率
 - 固定种子 np.random.seed(0)，数字可复现
@@ -178,6 +180,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 import numpy_keras as keras
 from numpy_keras.activations import functional as F
+from numpy_keras.activations._mapper import _ActivationMapper
 
 ASSETS = ROOT / "tutorials" / "assets"
 ASSETS.mkdir(parents=True, exist_ok=True)
@@ -203,11 +206,12 @@ grad_wrt_yhat = -y / np.clip(y_hat, 1e-10, 1 - 1e-10) / y.shape[0]
 J = y_hat[:, :, None] * (np.eye(3)[None, :, :] - y_hat[:, None, :])
 # 链式法则: ∂L/∂z = (∂L/∂ŷ) @ J
 grad_by_chain = np.einsum("bi,bij->bj", grad_wrt_yhat, J)
-# 库直接返回的"合体"梯度
+# 库的两步走：CE 返回对 ŷ 的原始梯度，softmax 层在自己的 backward 里
+# 做雅可比乘积（每层自持激活导数的约定）
 ce = keras.losses.CategoricalCrossEntropy()
-grad_by_lib = ce.grad(y, y_hat)
+grad_by_lib = _ActivationMapper().backward("softmax", y_hat, ce.grad(y, y_hat), {})
 print(f"  链式法则手算 ∂L/∂z = {grad_by_chain[0]}")
-print(f"  库的 CategoricalCrossEntropy.grad = {grad_by_lib[0]}")
+print(f"  库（softmax 层 backward）∂L/∂z = {grad_by_lib[0]}")
 print(f"  两者一致: {np.allclose(grad_by_chain, grad_by_lib)}")
 
 # 3. 学习减速实验：MSE vs 交叉熵
@@ -307,7 +311,7 @@ softmax 数值稳定:
 softmax+CE 合体梯度验证:
   y_hat = softmax(z) = [0.03911257 0.78559703 0.17529039]
   链式法则手算 ∂L/∂z = [ 0.03911257 -0.21440297  0.17529039]
-  库的 CategoricalCrossEntropy.grad = [ 0.03911257 -0.21440297  0.17529039]
+  库（softmax 层 backward）∂L/∂z = [ 0.03911257 -0.21440297  0.17529039]
   两者一致: True
 
 玩具数据: (400, 2), 标签 [0 1]
@@ -327,7 +331,7 @@ softmax+CE 合体梯度验证:
 
 - 损失函数是反向传播的种子：`__call__` 给人类看标量，`grad` 给优化器用梯度
 - MSE 的梯度带 sigmoid' 因子 → "自信地错"时学习减速；交叉熵没有这个因子
-- **softmax + CE 的合体梯度 = (ŷ − y)/N**，所以库刻意不提供 `softmax_deriv`——softmax 只能配交叉熵
+- **softmax + CE 的合体梯度 = (ŷ − y)/N**：CE 返回原始梯度，softmax 层用雅可比乘积收尾——库因此不需要 `softmax_deriv`，且 softmax 现在对任何损失都数学正确
 - `sparse_categorical_crossentropy` 是名字别名，one-hot 发生在 `fit` 内部
 - 数值稳定无处不在：CE 的 clip(1e-10)，softmax 的减最大值
 

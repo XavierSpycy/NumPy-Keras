@@ -22,45 +22,63 @@ params       = 优化器更新        # optimizer.update  ← 下一篇的主角
 
 一个两层的 MLP：a₁ = f₁(W₁x + b₁)，ŷ = f₂(W₂a₁ + b₂)，L = loss(y, ŷ)。对 W₂ 求梯度，链式法则走两步：
 
-$$\frac{\partial L}{\partial W_2} = a_1^\top \cdot \frac{\partial L}{\partial \hat y}, \qquad \frac{\partial L}{\partial a_1} = \frac{\partial L}{\partial \hat y} \cdot W_2^\top \odot f_1'(a_1)$$
+$$\frac{\partial L}{\partial W_2} = a_1^\top \cdot \frac{\partial L}{\partial z_2}, \qquad \frac{\partial L}{\partial z_1} = \left(\frac{\partial L}{\partial \hat y} \odot f_2'(\hat y)\right) \cdot W_2^\top, \qquad \frac{\partial L}{\partial x} = \frac{\partial L}{\partial z_1} \cdot W_1^\top$$
 
-注意第二个式子的两个操作：**`@ W.T` 把梯度传回上一层，`⊙ f'(a₁)` 穿过激活函数**。这就是 01 篇说的"导数应用在后激活值上"——a₁ 正好是上一层的输出，forward 时已经缓存好了。看库里的实现（`numpy_keras/layers/dense.py` 的纯 NumPy 路径）：
+其中 z₁ = W₁x + b₁ 是第一个隐层的预激活。每个等式的含义：**先乘自己的激活导数得到 ∂L/∂z，再做矩阵乘**。01 篇说过导数定义在后激活值上——f'(y) 就在本层前向时缓存的输出上取值。看库里的实现（`numpy_keras/layers/dense.py` 的纯 NumPy 路径）：
 
 ```python
 # excerpt: numpy_keras/layers/dense.py
+        # own activation, evaluated on the cached post-activation output:
+        # dz = grad ⊙ f'(y); the parameter gradients use dz, and dx = dz @ W.T
+        grad = self.__activation_mapper.backward(
+            self.__activation, self.output, grad, self.__activation_config)
         self.grads["W"] = np.dot(self.inputs.T, grad)
         if "b" in self.grads:
             self.grads["b"] = np.sum(grad, axis=0)
-        grad = np.dot(grad, self.params["W"].T)
-        if self.__activation_deriv:
-            grad *= self.__activation_deriv(self.inputs, **self.__activation_derive_config)
-        return grad
+        return np.dot(grad, self.params["W"].T)
 ```
 
 四行对应四个数学操作：
 
-1. `dW = inputs.T @ grad`——式 (1)；
-2. `db = sum(grad, axis=0)`——偏置的梯度是每行梯度之和；
-3. `grad = grad @ W.T`——式 (2) 的左半，把梯度送回上一层；
-4. `grad *= prev_deriv(self.inputs)`——式 (2) 的右半，`self.inputs` 就是上一层的后激活输出 a₁，导数在其中取值。
+1. `grad = mapper.backward(自己的激活, self.output, grad)`——∂L/∂z = ∂L/∂y ⊙ f'(y)，导数在**本层缓存的后激活输出**上取值；
+2. `dW = inputs.T @ grad`——注意用的是**乘完导数**的 ∂L/∂z，不是原始 grad；
+3. `db = sum(grad, axis=0)`——偏置的梯度是每行梯度之和；
+4. `return grad @ W.T`——把 ∂L/∂z 送回上一层。
 
-## 2. 导数值"恰好一次"的约定
+## 2. 每层自持：建模型时只传形状
 
-`self.__activation_deriv` 是**上一层**的导数函数，它是在建模型时被注入的（`numpy_keras/models/sequential.py` 的 `__build`）：
+因为每层在 backward 里乘**自己**的激活导数，建模型时根本不需要跨层传递任何导数信息——`__build` 只剩形状链（`numpy_keras/models/sequential.py`）：
 
 ```python
 # excerpt: numpy_keras/models/sequential.py
-            if hasattr(layer, 'set_activation_deriv'):
-                layer.set_activation_deriv(prev_layer_activation, prev_layer_activation_config)
+        output_dim = None
+        output_shape = None
+        for layer in self.layers.values():
+            # 4D-aware layers (Conv2D, MaxPool2D, ...) need the full input
+            # shape; the scalar output_dim is not enough for them.
+            if output_shape is not None and hasattr(layer, 'set_input_shape'):
+                layer.set_input_shape(output_shape)
+            if output_dim and hasattr(layer, 'init_params'):
+                layer.init_params(output_dim)
             if hasattr(layer, 'set_output_dim'):
                 layer.set_output_dim(output_dim)
-            prev_layer_activation = layer.activation if hasattr(layer, 'activation') else prev_layer_activation
-            prev_layer_activation_config = layer.activation_config if hasattr(layer, 'activation_config') else prev_layer_activation_config
             output_dim = layer.output_dim
             output_shape = getattr(layer, 'output_shape', None)
 ```
 
-每建一层，就把当前层的 `activation` 记住，注入给下一层。于是 Dense 在 backward 时负责乘上一层的导数；最后一层没人替它乘，由 `__criterion` 兜底；RNN 层（SimpleRNN/LSTM/GRU）的输出不是单一预激活的逐元素函数，它们的 `activation` 属性刻意返回 `None`，把输出链完全收回层内（本系列《RNN 三部曲》会讲这个故事）。整个网络的每个激活导数**恰好被应用一次**——这是这个库最核心的设计约定，读任何一层的 backward 前先记住它。
+`__criterion` 同样被简化成两件事——算损失、算损失对预测的**原始梯度**：
+
+```python
+# excerpt: numpy_keras/models/sequential.py
+        loss = self.__loss_func(y, y_hat)
+        grad = self.__loss_func.grad(y, y_hat)
+        # Each layer chains through its own activation inside its backward,
+        # so the criterion only computes the loss and its gradient w.r.t.
+        # the network output.
+        return loss, grad
+```
+
+这个"每层自持"的约定有一个漂亮的副作用：**任何层插在任何位置都天然正确**。BatchNormalization、Dropout、自定义层——它们不需要知道上游是什么激活，上游也不关心它们改不改值。每个激活导数恰好被应用一次，**由构造保证**。RNN 层也遵循同一约定：门与候选的导数在 backward 里逐时间步应用（它们的 `activation` 属性只是自省标记，返回 None）。
 
 `__backward` 本身简单得不像话：
 
@@ -349,8 +367,8 @@ autograd 自动微分 200 轮后 loss: 0.135474
 ## 7. 小结
 
 - 反向传播 = 沿计算图倒推参数梯度；每个 batch 四步曲的前三步本文已全部拆开
-- Dense.backward 四行 = 链式法则四步：dW、db、`@ W.T` 回传、`⊙ f'(a)` 穿激活
-- 导数值"恰好一次"约定：下一层乘上一层的 deriv，criterion 兜底最后一层，RNN 自持
+- Dense.backward 四行 = 链式法则四步：先乘自己的导数（∂L/∂z = ∂L/∂y ⊙ f'(y)，在缓存输出上取值），再用它算 dW、db，最后 `@ W.T` 回传
+- 每层自持：`__build` 只传形状、criterion 只算损失与原始梯度——任何层插在任何位置都天然正确
 - 手写梯度必须用有限差分验证——包括本系列的 RNN（BPTT）也在发布前逐参数校验过
 - 手写实现与 autograd 自动微分在同一个种子下轨迹完全重合：理解与正确，可以兼得
 
