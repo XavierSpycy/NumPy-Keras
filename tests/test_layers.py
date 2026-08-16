@@ -54,19 +54,17 @@ def test_dense_backward_weight_gradients():
     np.testing.assert_allclose(d.grads["b"], grad.sum(axis=0))
 
 
-def test_dense_backward_applies_previous_layer_activation_deriv():
-    """The returned gradient is (grad @ W.T) elementwise-multiplied by the
-    previous layer's activation derivative, evaluated at its output (= this
-    layer's input). This is the mechanism Sequential relies on."""
+def test_dense_backward_applies_own_activation_deriv():
+    """The returned gradient is (grad ⊙ f'(output)) @ W.T -- the layer
+    chains through ITS OWN activation, evaluated on its cached output."""
     rng = np.random.RandomState(3)
-    d = make_dense(2, activation="linear", input_dim=3)
-    d.set_activation_deriv("tanh", {})
+    d = make_dense(2, activation="tanh", input_dim=3)
     d.params["W"] = rng.randn(3, 2)
     X = rng.randn(5, 3)
-    d.forward(X, is_training=True)
+    out = d.forward(X, is_training=True)
     grad = rng.randn(5, 2)
     returned = d.backward(grad)
-    expected = (grad @ d.params["W"].T) * (1 - X ** 2)  # tanh_deriv
+    expected = (grad * (1 - out ** 2)) @ d.params["W"].T  # tanh_deriv at own output
     np.testing.assert_allclose(returned, expected)
 
 
@@ -179,14 +177,13 @@ def test_input_accepts_tuple_shape():
 
 def test_activation_layer_forward_and_backward():
     act = layers.Activation("tanh")
-    act.set_activation_deriv("sigmoid", {})
     rng = np.random.RandomState(10)
     X = rng.randn(5, 3)
-    np.testing.assert_allclose(act.forward(X, is_training=True), np.tanh(X))
+    out = act.forward(X, is_training=True)
+    np.testing.assert_allclose(out, np.tanh(X))
     grad = rng.randn(5, 3)
-    # the stored deriv (of the previous layer's activation) is applied
-    # directly to this layer's input: sigmoid_deriv(x) = x * (1 - x)
-    expected = grad * (X * (1 - X))
+    # the layer's OWN activation deriv, evaluated on its cached output
+    expected = grad * (1 - out ** 2)
     np.testing.assert_allclose(act.backward(grad), expected)
 
 
@@ -232,3 +229,73 @@ def test_batchnorm_4d_backward_gradient_check():
         bn.forward(X, is_training=True)  # refresh cached batch statistics
         bn.backward(delta)
         np.testing.assert_allclose(bn.grads[key], numerical, rtol=1e-3, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Regression: value-transforming layers must not break the gradient chain
+# ---------------------------------------------------------------------------
+
+def _model_gradcheck(model, X, y, seed=0, eps=1e-6):
+    """Finite-difference check over all params.  np.random is re-seeded
+    before every forward so stochastic layers (Dropout) see the same mask
+    in the analytic and numeric passes."""
+    np.random.seed(seed)
+    y_hat = model._Sequential__forward(X, is_training=True)
+    _, g = model._Sequential__criterion(y, y_hat)
+    model._Sequential__backward(g)
+
+    def loss_of():
+        np.random.seed(seed)
+        y_hat = model._Sequential__forward(X, is_training=True)
+        loss, _ = model._Sequential__criterion(y, y_hat)
+        return loss
+
+    worst = 0.0
+    for name, params in model.parameters.items():
+        for key, p in params.items():
+            ana = model.layers[name].grads[key]
+            fp, fa = p.ravel(), ana.ravel()
+            for i in range(fp.size):
+                old = fp[i]
+                fp[i] = old + eps
+                lp = loss_of()
+                fp[i] = old - eps
+                lm = loss_of()
+                fp[i] = old
+                num = (lp - lm) / (2 * eps)
+                worst = max(worst, abs(num - fa[i]) / max(1e-12, abs(num) + abs(fa[i])))
+    return worst
+
+
+def test_batchnorm_between_activation_and_dense_gradcheck():
+    """Regression: BatchNormalization transforms values, so a tanh Dense
+    before it must apply its own deriv -- the BN layer must not break it."""
+    from numpy_keras import Sequential
+
+    np.random.seed(0)
+    model = Sequential()
+    model.add(layers.Input(2))
+    model.add(layers.Dense(3, activation="tanh"))
+    model.add(layers.BatchNormalization())
+    model.add(layers.Dense(2, activation="linear"))
+    model.compile(loss="mse", optimizer="sgd")
+    X = np.random.randn(4, 2)
+    y = np.random.randn(4, 2)
+    assert _model_gradcheck(model, X, y) < 1e-6
+
+
+def test_dropout_between_activation_and_dense_gradcheck():
+    """Regression: inverted Dropout scales values, so a tanh Dense before
+    it must apply its own deriv -- the Dropout layer must not break it."""
+    from numpy_keras import Sequential
+
+    np.random.seed(0)
+    model = Sequential()
+    model.add(layers.Input(4))
+    model.add(layers.Dense(6, activation="tanh"))
+    model.add(layers.Dropout(0.5))
+    model.add(layers.Dense(2, activation="linear"))
+    model.compile(loss="mse", optimizer="sgd")
+    X = np.random.randn(5, 4)
+    y = np.random.randn(5, 2)
+    assert _model_gradcheck(model, X, y) < 1e-6

@@ -229,20 +229,20 @@ def test_conv_backward_matches_reference(stride, padding, use_bias):
     np.testing.assert_allclose(grad_next, dX, rtol=1e-12, atol=1e-12)
 
 
-def test_conv_backward_applies_previous_activation_deriv():
-    """The returned gradient is multiplied by the previous layer's
-    activation derivative, evaluated at this layer's input -- the same
-    mechanism Dense relies on."""
+def test_conv_backward_applies_own_activation_deriv():
+    """The layer chains through ITS OWN activation (evaluated on its cached
+    output) before col2im scatters the gradient back to the input."""
     rng = np.random.RandomState(5)
-    layer = make_conv(use_bias=False)
-    layer.set_activation_deriv("tanh", {})
+    layer = make_conv(use_bias=False, activation="tanh")
     layer.params["W"] = rng.randn(*layer.params["W"].shape)
     X = rng.randn(4, 6, 7, 2)
     layer.forward(X, is_training=True)
     grad = rng.randn(4, 4, 5, 3)
     grad_next = layer.backward(grad)
-    _, _, dX = conv_backward_ref(X, layer.params["W"], grad, 1, ((0, 0), (0, 0)))
-    np.testing.assert_allclose(grad_next, dX * (1 - X ** 2), rtol=1e-12, atol=1e-12)
+    # manual: deriv in output space, then the reference backward on the scaled grad
+    scaled = grad * (1 - layer.output ** 2)   # tanh_deriv at own output
+    _, _, expected = conv_backward_ref(X, layer.params["W"], scaled, 1, ((0, 0), (0, 0)))
+    np.testing.assert_allclose(grad_next, expected, rtol=1e-12, atol=1e-12)
 
 
 def test_conv_output_shape_with_same_padding():
