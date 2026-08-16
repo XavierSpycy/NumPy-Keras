@@ -38,7 +38,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e . pytest pytest-cov "autograd==1.7.0" "cython>=3.0.10"
+      - run: pip install -e . pytest pytest-cov "setuptools>=61.0" "autograd==1.7.0" "cython>=3.0.10"
       - run: python build_cython.py build_ext --inplace
       - run: python -m pytest tests/ -q --cov=numpy_keras --cov-report=term-missing --cov-report=xml --cov-fail-under=75
       - run: python tutorials/check_snippets.py
