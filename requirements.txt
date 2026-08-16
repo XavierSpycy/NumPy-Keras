@@ -1,4 +1,8 @@
 numpy==1.26.4
-# tqdm==4.66.1
-# matplotlib==3.8.2
-# autograd==1.7.0
+# Optional features (uncomment what you need, or use the extras):
+# tqdm==4.66.1          # progress bars during training
+# matplotlib==3.8.2     # plot_history
+# autograd==1.7.0       # the autograd/ mirror of the API
+# cython>=3.0.10        # the optional Cython kernels (then: python build_cython.py build_ext --inplace)
+# cupy-cuda12x>=13.6.0  # the optional GPU backend (pick the wheel matching your CUDA version)
+# pytest pytest-cov     # development: the test suite and coverage
