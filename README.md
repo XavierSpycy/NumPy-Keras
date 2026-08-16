@@ -5,6 +5,9 @@ English | [简体中文](README.zh-CN.md)
   <img src="figures/numpy_keras.jpg" width="20%">
   <br>
   <b>NumPy-Keras</b>
+  <br>
+  <a href="https://github.com/XavierSpycy/NumPy-Keras/actions/workflows/ci.yml"><img src="https://github.com/XavierSpycy/NumPy-Keras/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://codecov.io/gh/XavierSpycy/NumPy-Keras"><img src="https://codecov.io/gh/XavierSpycy/NumPy-Keras/branch/main/graph/badge.svg" alt="Coverage"></a>
 </p>
 
 **NumPy-Keras**, originally named **NumPyMultilayerPerceptron**, is a deep learning library implemented purely with `numpy`, covering the classic architecture trilogy — multilayer perceptrons, convolutional networks and recurrent networks (SimpleRNN/LSTM/GRU). Its purpose is to provide a simple and easy-to-understand implementation, aimed at facilitating learning and teaching.

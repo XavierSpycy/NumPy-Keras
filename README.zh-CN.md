@@ -5,6 +5,9 @@
   <img src="figures/numpy_keras.jpg" width="20%">
   <br>
   <b>NumPy-Keras</b>
+  <br>
+  <a href="https://github.com/XavierSpycy/NumPy-Keras/actions/workflows/ci.yml"><img src="https://github.com/XavierSpycy/NumPy-Keras/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://codecov.io/gh/XavierSpycy/NumPy-Keras"><img src="https://codecov.io/gh/XavierSpycy/NumPy-Keras/branch/main/graph/badge.svg" alt="Coverage"></a>
 </p>
 
 **NumPy-Keras**, 原名 **NumPyMultilayerPerceptron**, 是一个纯 `numpy` 实现的深度学习库, 覆盖经典架构三部曲——多层感知机、卷积网络与循环网络 (SimpleRNN/LSTM/GRU)。它的目的是为了提供一个简单的、易于理解的实现, 以便于学习和教学。

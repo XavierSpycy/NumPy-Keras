@@ -127,3 +127,34 @@ def test_set_backend_patches_consumer_modules():
     assert F.np is np
     B.set_backend("numpy")  # idempotent
     assert F.np is np
+
+
+def test_every_backend_consumer_is_in_patch_list():
+    """Meta-test for the set_backend patch mechanism: every module that
+    binds the backend alias as ``np`` must appear in backend's consumer
+    list, or a runtime backend switch would silently leave it stale."""
+    import importlib
+    import inspect
+    import pkgutil
+    import re
+
+    import numpy_keras
+
+    for modinfo in pkgutil.walk_packages(numpy_keras.__path__,
+                                         prefix="numpy_keras."):
+        if modinfo.name.startswith("numpy_keras.autograd"):
+            continue  # the autograd mirror stays pure numpy by design
+        if modinfo.name == "numpy_keras.backend":
+            continue  # its own docstring mentions the alias pattern
+        try:
+            mod = importlib.import_module(modinfo.name)
+        except ImportError:
+            continue
+        try:
+            src = inspect.getsource(mod)
+        except (OSError, TypeError):
+            continue  # compiled extensions (e.g. cython._kernels) have no source
+        if re.search(r"from \.+backend import .*\bxp as np\b", src):
+            assert modinfo.name in B._CONSUMER_MODULES, (
+                f"{modinfo.name} binds the backend alias but is missing "
+                f"from backend._CONSUMER_MODULES")

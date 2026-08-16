@@ -27,7 +27,9 @@ jobs:
 
   test-full-cpu:
     # Everything that runs without a GPU: compiled Cython kernels and the
-    # autograd mirror of the API.  Also gates the tutorial snippets.
+    # autograd mirror of the API.  Also gates the tutorial snippets and
+    # enforces a coverage floor (GPU-only branches are legitimately
+    # uncovered here, so the floor is set below the local GPU runs).
     name: full CPU (py3.12, cython + autograd)
     runs-on: ubuntu-latest
     steps:
@@ -36,7 +38,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e . pytest "autograd==1.7.0" "cython>=3.0.10"
+      - run: pip install -e . pytest pytest-cov "autograd==1.7.0" "cython>=3.0.10"
       - run: python build_cython.py build_ext --inplace
-      - run: python -m pytest tests/ -q
+      - run: python -m pytest tests/ -q --cov=numpy_keras --cov-report=term-missing --cov-report=xml --cov-fail-under=75
       - run: python tutorials/check_snippets.py
+      - uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
