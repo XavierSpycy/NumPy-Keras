@@ -7,7 +7,7 @@ include = ["numpy_keras*"]
 
 [project]
 name = "numpy-keras"
-version = "2.1.0"
+version = "2.2.0"
 description = "A deep learning library from scratch using NumPy — MLP, CNN and RNN (SimpleRNN/LSTM/GRU) — written to read like a textbook."
 authors = [{ name="Jiarui Xu", email="xujiarui98@foxmail.com" }]
 dependencies = [
@@ -29,6 +29,14 @@ autograd-viz = [
 ]
 cython = [
     "cython>=3.0.10"
+]
+# CuPy GPU acceleration (optional).  Pick the wheel matching your CUDA
+# version: cupy-cuda12x runs on any driver >= 12.x (use this on machines
+# whose toolkit is older than the driver, e.g. CUDA 13.0 drivers with a
+# 12.1 toolkit), cupy-cuda13x needs a driver >= 13.0 and a matching
+# toolkit.  Not part of `all` because it is CUDA-version specific.
+cupy = [
+    "cupy-cuda12x>=13.6.0"
 ]
 all = [
     "tqdm==4.66.1",

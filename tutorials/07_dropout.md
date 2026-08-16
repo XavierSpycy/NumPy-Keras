@@ -16,8 +16,12 @@
 ```python
 # excerpt: numpy_keras/layers/dropout.py
         if is_training:
-            # Generate the dropout mask
-            self.__mask = (np.random.rand(*inputs.shape) > self.__rate) / (1.0 - self.__rate)
+            # Generate the dropout mask on the host (seed parity), cast to the
+            # input dtype (a float64 mask would promote float32 models), then
+            # move it to the active device via asarray (identity under numpy).
+            self.__mask = np.asarray(
+                (_np.random.rand(*inputs.shape) > self.__rate) / (1.0 - self.__rate),
+                dtype=inputs.dtype)
             return inputs * self.__mask # Multiply the inputs by the dropout mask
         # Otherwise, return the inputs
         else:

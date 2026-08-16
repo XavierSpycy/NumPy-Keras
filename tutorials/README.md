@@ -19,6 +19,7 @@
 | 10 | [RNN 三部曲](10_rnn.md) | SimpleRNN/LSTM/GRU、BPTT | [code/10_rnn.py](code/10_rnn.py) | ~1 分钟 |
 | 11 | [引擎室](11_engine_room.md)（可选） | 鸭子类型契约、新增一层 | [code/11_engine_room.py](code/11_engine_room.py) | 数秒 |
 | 12 | [Cython 加速](12_cython.md)（可选） | 编译内核、基准方法学 | [code/12_cython.py](code/12_cython.py) | ~10 秒 × 2 模式 |
+| 13 | [CuPy GPU 加速](13_cupy.md)（可选） | 后端开关、主机/设备边界、瓶颈转移 | [code/13_cupy.py](code/13_cupy.py) | ~5 秒 × 2 模式 |
 
 前置环境（每篇 docstring 也有）：仓库根目录 `pip install -e .`，数据文件随仓库提供。除 06（编译内核模式测量）外，所有数字以纯 NumPy 模式为准（`NUMPY_KERAS_DISABLE_CYTHON=1`），两模式轨迹由奇偶测试锁定一致。
 
@@ -36,4 +37,4 @@
 - **LaTeX 公式**：知乎支持 `$$...$$`；CSDN 支持差——建议把公式截图转图片，或改写为行内文本
 - **外链**：GitHub 项目链接保留；`tutorials/code/xx.py` 等仓库路径改成 GitHub 直达链接（`https://github.com/XavierSpycy/NumPy-Keras/blob/main/tutorials/code/xx.py`）
 - **元信息块**：发布时把"前置知识"改成软提及版本（当前写法已兼容）
-- **顺序建议**：按 00 → 12 顺序发布，每篇之间留出传播窗口；01（激活函数）和 06（MLP 深入）自带强实验钩子，适合作为首发引流篇
+- **顺序建议**：按 00 → 13 顺序发布，每篇之间留出传播窗口；01（激活函数）和 06（MLP 深入）自带强实验钩子，适合作为首发引流篇

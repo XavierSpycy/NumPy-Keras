@@ -111,6 +111,7 @@ A Chinese tutorial series in `tutorials/` builds the whole trilogy from scratch,
 | 10 | RNN 三部曲 | SimpleRNN/LSTM/GRU and BPTT |
 | 11 | 引擎室 (可选) | the duck-typed layer contract, adding a layer |
 | 12 | Cython 加速 (可选) | compiled kernels and benchmark methodology |
+| 13 | CuPy GPU 加速 (可选) | backend switch, host/device boundary, where the bottleneck moves |
 
 Each article stands alone, and its code is byte-identical to `tutorials/code/*.py`; see [tutorials/README.md](tutorials/README.md) for the full index and the Zhihu/CSDN publishing checklist.
 
@@ -209,7 +210,7 @@ In addition to the basic implementation, we also provide some additional feature
 To conclude, our framework is a lightweight framework that only depends on the `numpy` library and provides a simple and easy-to-understand implementation. We hope that this framework can help users better understand the principles of deep learning and better use deep learning frameworks.
 
 ## :sparkles: 2. Dependencies
-A `pytest` suite in [tests](tests) covers the layers, losses, optimizers, callbacks and the CNN/RNN paths (`python -m pytest tests/ -q`, currently 241 tests). The library is developed and tested in the following environment:
+A `pytest` suite in [tests](tests) covers the layers, losses, optimizers, callbacks and the CNN/RNN paths, plus the Cython parity, GPU (CuPy) parity, float32 and autograd-subpackage tests (`python -m pytest tests/ -q`, currently 315 tests; the GPU/optional-dependency parts skip automatically when unavailable). The library is developed and tested in the following environment:
 - Python 3.12.1
 - numpy 1.26.4
 
@@ -225,6 +226,8 @@ Here are the versions of `tqdm`, `matplotlib`, and `autograd`:
 - autograd 1.7.0
 
 If there are no major differences in the versions, we believe that this library should work on other versions as well.
+
+The `autograd/` subpackage (an automatic-differentiation mirror of the API: forward-only layers plus gradients via `autograd.grad`) is covered by `tests/test_autograd.py`, which is skipped automatically when `autograd` is not installed.
 
 ### 2.1 Optional Cython Acceleration
 By default, everything runs on pure NumPy. If you would like to speed up training and inference, you can compile the optional Cython kernels (one fused pass per parameter array for the optimizer updates, fused bias/activation passes for `Dense`, compiled elementwise activations, and compiled `col2im` / max-pooling kernels for the convolutional layers):
@@ -245,6 +248,40 @@ The table below was produced with `python benchmarks/bench_cython.py` (MLP rows:
 | LeNet-style CNN (6@5x5 / pool / 16@5x5 / pool / 120 / 10) on 2000x28x28 MNIST, 2 epochs, batch 32 | 14.47s ± 0.66 | 8.69s ± 0.30 | ~1.7x |
 
 Measured on an Apple M2 Pro (Mac14,9, 16 GB RAM, macOS arm64) with Python 3.12.8 and NumPy 1.26.4. The speedup depends on the CPU, the BLAS implementation, and the matrix sizes, so do not expect identical numbers on other machines. Absolute times in particular are sensitive to concurrent load — BLAS-heavy workloads are affected the most (in an idle window on the same machine the script measured ~2.5s vs ~4.1s for the MNIST-like configuration), while the speedup ratio stayed in the ~1.3-1.6x band across conditions. Re-run the benchmark on your own machine before drawing conclusions. Training trajectories are essentially identical in both modes: on the CNN configuration above, two epochs of the two modes reached the same loss and accuracy to four decimal places.
+
+### 2.2 Optional GPU Acceleration (CuPy)
+The library also ships an optional CuPy GPU backend that follows the same philosophy as the Cython layer: the default behavior (pure NumPy) is **unchanged**, the GPU path is opt-in, and it degrades gracefully (a warning plus fallback to NumPy when CuPy is not installed).
+
+**Installation** (pick the wheel matching your CUDA version; `cupy-cuda12x` works on any driver >= 12.x, e.g. a CUDA 13.0 driver with a 12.1 toolkit):
+
+```
+pip install numpy-keras[cupy]        # or: pip install cupy-cuda12x>=13.6.0
+```
+
+**Enabling the GPU backend** (both ways are equivalent; the environment variable is read at import time, while `set_backend` can be called at any time, e.g. from a notebook after the package is already imported):
+
+```
+export NUMPY_KERAS_BACKEND=cupy      # option 1: environment variable
+```
+
+```python
+import numpy_keras
+numpy_keras.set_backend("cupy")      # option 2: runtime switch
+```
+
+`numpy_keras.get_backend()` reports the active backend (`"numpy"` / `"cupy"`). No manual data movement is needed: at the entry of `fit` / `predict` / `evaluate` the model automatically syncs its parameters, gradients, BatchNorm statistics and optimizer state to the active device (in both directions). Random number generation, data preparation (shuffling, one-hot encoding) and label/metric math always stay on the host — so **with the same seed, CPU and GPU runs get bit-identical initial weights and Dropout masks**. The two paths are pinned against each other by `tests/test_cupy.py` (44 tests covering activations, dense/conv/pooling, the three RNNs, the four optimizers, end-to-end training, a finite-difference gradient check and backend switching). Numerically, GPU reduction orders and libm differ from NumPy at the ~1-ulp level; the library stays float64 throughout, and training trajectories agree to 4-5 decimal places.
+
+**Measured speedups** (2× NVIDIA A800 80GB, Python 3.12.3, cupy-cuda12x 13.6.0, via `benchmarks/bench_cupy.py`, against the pure NumPy path): matrix-bound operators benefit massively — elementwise activations 61-203x, `Dense` forward/backward 45-59x, the fused optimizer kernels ~83x (the device twin of the Cython kernels: one GPU kernel per param array — the pure path's per-op launch overhead was 40% of the model-level time), convolution and pooling 5-13x. Model-level (`fit` timed end to end, including host-side data prep; MLP 10000x784 [256,256,10], 3 epochs, batch 64, warmed-up medians; Cython and CuPy are the library's two optional acceleration layers, and a machine with the Cython kernels compiled gets them on the CPU side automatically):
+
+| Configuration | Pure NumPy | CPU + Cython | CuPy | GPU/Pure NumPy |
+|---|---|---|---|---|
+| no metrics | 2.47 s | 1.67 s | 0.78 s | ~3.2x |
+| + accuracy metric | 2.20 s | 2.13 s | 1.05 s | ~2.1x |
+| tutorial script (with metric, `tutorials/code/13_cupy.py`) | — | 2.20 s | 1.20 s | ~1.8x |
+
+**Known exception: RNNs at this teaching scale are *slower* on the GPU** (the per-timestep Python loop is dominated by many small kernel launches; the GPU branch batches the input projection into one 3D matmul, which is not enough to offset the launch overhead — only much larger N/T/U pays off on the device). Re-run the benchmark on your own machine before drawing conclusions.
+
+**Compute dtype**: `Sequential(..., dtype="float32")` runs the model in float32 (float64 is the default). Parameters, gradients and every layer output stay at the chosen precision — cupy's `clip`/`maximum` turn Python scalars into 0-d float64 arrays and silently promote float32, so the library enforces the dtype at the two choke points (activation outputs and the loss gradient; see the 9 tests in `tests/test_float32.py`). float32 halves device memory and pays off hugely on consumer GPUs (an RTX 4090's fp64 throughput is 1/64 of its fp32); on the A800 used here cuBLAS runs float64 on FP64 tensor cores too, so at teaching scale the two dtypes measure about the same (f64 1.10s / f32 1.15s, identical accuracy). The Cython kernels stay float64-only; float32 models automatically take the pure NumPy path or the fused GPU kernels.
 
 ## :sparkles: 3. Testing on Other Datasets
 Perhaps you have a question: We only tested on the MNIST dataset, and our model performed very well in terms of accuracy. But is it possible that our model overfits on the MNIST dataset? How does it perform on other datasets?
@@ -795,4 +832,13 @@ Right here, we have implemented the optimizers commonly used by beginners to hel
       - **refactor**: Each layer now chains through its own activation inside `backward` (the criterion only computes the loss and its raw gradient) — simpler semantics, and BN/Dropout/custom layers are correct by construction. The softmax layer handles its Jacobian itself.
       - **fix**: Corrected the He (kaiming) initializer scales and the SGD Nesterov update.
       - **build**: Fixed package discovery in `pyproject.toml` and documented `pip install -e .`.
+  - v2.2.0
+    - 2026.08.16
+      - **feat**: Added the optional CuPy GPU backend (`numpy_keras.set_backend` / the `NUMPY_KERAS_BACKEND` environment variable): params/grads/BatchNorm stats/optimizer state auto-sync both ways at the entry of `fit`/`predict`/`evaluate`, RNG stays on the host so same-seed runs are bit-identical across backends, and missing CuPy degrades gracefully — pinned by `tests/test_cupy.py` (44 tests).
+      - **feat**: Added fused GPU optimizer kernels (`numpy_keras/optimizers/_gpu_kernels.py`, the device twin of the Cython kernels: one GPU kernel per param array).
+      - **feat**: Added a float32 compute dtype (`Sequential(..., dtype="float32")`): params, gradients and every layer output keep the chosen precision (guarding the choke points where cupy scalar promotion would silently produce float64), covered by `tests/test_float32.py` (9 tests).
+      - **feat**: Added tutorial chapter 13 (CuPy GPU acceleration).
+      - **fix**: Fixed the `autograd/` subpackage (Flatten dispatch, `predict` assembly, best-weights snapshot/restore, import crash without the `autograd` library) and added `tests/test_autograd.py` (7 tests).
+      - **perf**: On the GPU, `predict` now decodes labels on the device with one big forward pass; the softmax backward uses the contracted form there (no Jacobian materialization, no slow einsum).
+      - **test**: The suite now contains 315 tests (Cython parity, GPU parity, float32, autograd).
       - **test**: Added initializer regression tests; the suite now has 244 tests.
