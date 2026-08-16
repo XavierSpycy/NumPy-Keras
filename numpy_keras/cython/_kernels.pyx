@@ -414,7 +414,7 @@ def sgd_update(cnp.ndarray p, cnp.ndarray g, cnp.ndarray v,
             t1 = momentum * vp              # round 3
             t2 = lr * gi                    # round 4
             vv[i] = t1 - t2                 # round 5
-            t3 = -momentum * vp             # round 6 ((-m) * v_prev)
+            t3 = momentum * vp              # round 6 (m * v_prev)
             t4 = (1.0 + momentum) * vv[i]   # round 7
             t5 = t3 - t4                    # round 8
             pv[i] -= t5                     # round 9
