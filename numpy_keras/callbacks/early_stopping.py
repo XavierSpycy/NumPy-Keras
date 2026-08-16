@@ -18,7 +18,9 @@ class EarlyStopping:
         Initialize EarlyStopping object.
 
         Parameters:
-        - monitor (str): metric to be monitored. Default: 'val_loss'.
+        - monitor (str): quantity to monitor: ``'loss'`` (the epoch
+          training loss) or the name of a recorded metric, e.g.
+          ``'val_loss'`` / ``'train_accuracy'``. Default: 'val_loss'.
         - min_delta (float): minimum change in the monitored metric to qualify as an improvement. Default: 0.0.
         - patience (int): number of epochs with no improvement after which training will be stopped. Default: 5.
         - mode (Literal['min', 'max']): one of {'min', 'max'}. In 'min' mode, training will stop when the quantity monitored has stopped decreasing; 
@@ -85,8 +87,12 @@ class EarlyStopping:
         # If curr_epoch is less than start_from_epoch, return False, False
         if curr_epoch <= self.start_from_epoch:
             return False, False
-        # Compute monitored metric
-        curr_value = model.history.metrics[self.monitor][-1]
+        # Compute monitored metric ('loss' reads the epoch training loss;
+        # anything else must be a recorded metric name)
+        if self.monitor == 'loss':
+            curr_value = model.history.loss[-1]
+        else:
+            curr_value = model.history.metrics[self.monitor][-1]
         # Check if curr_value has improved
         if self.__check_improvement(curr_value):
             self.counter = 0

@@ -294,6 +294,16 @@ class Sequential:
             batch_size: int = 32,
         ) -> np.ndarray:
         
+        """
+        Predict on the given data.
+
+        The return type follows the model's task: with a
+        ``sparse_categorical_crossentropy`` loss the outputs are decoded
+        into integer class labels (an (N,) array via ``idx2label``); with
+        any other loss the raw network outputs are returned (an (N, ...)
+        array of the model's dtype, e.g. softmax probabilities).
+        """
+
         self.__sync_backend()
         X = asnumpy(X) if is_cupy_array(X) else np.array(X).copy()
         outputs = []

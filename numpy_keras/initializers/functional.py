@@ -29,11 +29,19 @@ def _fan_out(shape: Tuple[int, ...]) -> int:
     """Number of outputs a neuron feeds: all axes but the first."""
     return int(_np.prod(shape[1:]))
 
-def xaiver_uniform(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
+def xavier_uniform(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
     return np.asarray(gain * _np.random.uniform(low=-_np.sqrt(6 / (_fan_in(shape) + _fan_out(shape))), high=_np.sqrt(6 / (_fan_in(shape) + _fan_out(shape))), size=shape))
 
-def xaiver_normal(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
+def xavier_normal(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
     return np.asarray(gain * _np.random.normal(loc=0.0, scale=_np.sqrt(2 / (_fan_in(shape) + _fan_out(shape))), size=shape))
+
+
+# Misspelled historical names, kept for backward compatibility.
+def xaiver_uniform(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
+    return xavier_uniform(shape, gain)
+
+def xaiver_normal(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
+    return xavier_normal(shape, gain)
 
 def kaiming_uniform(shape: Tuple[int, int], mode: str = 'fan_in') -> np.ndarray:
     fan = _fan_in(shape) if mode == 'fan_in' else _fan_out(shape)
