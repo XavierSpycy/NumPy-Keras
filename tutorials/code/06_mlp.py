@@ -44,8 +44,8 @@ np.random.seed(0)
 # 1. 各初始化器的实际尺度（同一个形状）
 print("初始化器尺度 (shape=(64, 128), fan_in=64, fan_out=128):")
 INITIALIZERS = [
-    ("glorot_uniform", F.xaiver_uniform),
-    ("glorot_normal", F.xaiver_normal),
+    ("glorot_uniform", F.xavier_uniform),
+    ("glorot_normal", F.xavier_normal),
     ("he_uniform", F.kaiming_uniform),
     ("he_normal", F.kaiming_normal),
     ("random_uniform", lambda s: F.uniform(s, -0.05, 0.05)),

@@ -5,6 +5,9 @@
   <img src="figures/numpy_keras.jpg" width="20%">
   <br>
   <b>NumPy-Keras</b>
+  <br>
+  <a href="https://github.com/XavierSpycy/NumPy-Keras/actions/workflows/ci.yml"><img src="https://github.com/XavierSpycy/NumPy-Keras/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://codecov.io/gh/XavierSpycy/NumPy-Keras"><img src="https://codecov.io/gh/XavierSpycy/NumPy-Keras/branch/main/graph/badge.svg" alt="Coverage"></a>
 </p>
 
 **NumPy-Keras**, 原名 **NumPyMultilayerPerceptron**, 是一个纯 `numpy` 实现的深度学习库, 覆盖经典架构三部曲——多层感知机、卷积网络与循环网络 (SimpleRNN/LSTM/GRU)。它的目的是为了提供一个简单的、易于理解的实现, 以便于学习和教学。
@@ -111,6 +114,7 @@ pip3 install jupyter ipywidgets
 | 10 | RNN 三部曲 | SimpleRNN/LSTM/GRU 与 BPTT |
 | 11 | 引擎室 (可选) | 层的鸭子类型契约、新增一层 |
 | 12 | Cython 加速 (可选) | 编译内核与基准方法学 |
+| 13 | CuPy GPU 加速 (可选) | 后端开关、主机/设备边界、瓶颈转移 |
 
 每篇文章独立成文, 其代码与 `tutorials/code/*.py` 逐字节一致; 完整索引与知乎/CSDN 发布清单见 [tutorials/README.md](tutorials/README.md)。
 
@@ -208,7 +212,7 @@ print(f"Accuracy on the test set: {model.evaluate(X_test, y_test):.2%}")
 总之, 我们的框架是一个轻量级的框架, 仅依赖 `numpy` 库, 并且提供了一个简单的、易于理解的实现。我们希望这个框架能够帮助用户更好地理解深度学习的原理, 并且能够更好地使用深度学习框架。
 
 ## :sparkles: 2. 依赖
-[tests](tests) 中提供了 `pytest` 测试套件, 覆盖各层、损失函数、优化器、回调以及 CNN/RNN 路径 (`python -m pytest tests/ -q`, 当前 241 个测试)。本库在以下环境中开发与测试:
+[tests](tests) 中提供了 `pytest` 测试套件, 覆盖各层、损失函数、优化器、回调以及 CNN/RNN 路径, 另含 Cython 奇偶、GPU (CuPy) 奇偶、float32 与 autograd 子包测试 (`python -m pytest tests/ -q`, 当前 315 个测试, 无 GPU/未装可选依赖时对应部分自动跳过)。本库在以下环境中开发与测试:
 - Python 3.12.1
 - numpy 1.26.4
 
@@ -224,6 +228,8 @@ print(f"Accuracy on the test set: {model.evaluate(X_test, y_test):.2%}")
 - autograd 1.7.0
 
 只要版本没有太大的差异, 我们相信这个库应该可以在其他版本上正常运行。
+
+`autograd/` 子包 (基于 `autograd` 库的自动求导对照实验: 前向层 + `autograd.grad` 求梯度) 由 `tests/test_autograd.py` 覆盖, 未安装 `autograd` 时自动跳过。
 
 ### 2.1 可选的 Cython 加速
 默认情况下, 本库完全基于纯 NumPy 运行。如果您希望加速训练与推理, 可以编译可选的 Cython 内核 (优化器更新对每个参数数组做单趟融合计算、`Dense` 层的偏置/激活函数融合、编译版逐元素激活函数、以及卷积层使用的 `col2im` 散射与最大池化内核):
@@ -244,6 +250,40 @@ python build_cython.py build_ext --inplace
 | LeNet 风格 CNN (6@5x5 / 池化 / 16@5x5 / 池化 / 120 / 10), 2000x28x28 MNIST, 2 epochs, batch 32 | 14.47s ± 0.66 | 8.69s ± 0.30 | ~1.7x |
 
 测试环境: Apple M2 Pro (Mac14,9, 16 GB 内存, macOS arm64), Python 3.12.8, NumPy 1.26.4。加速比取决于 CPU、BLAS 实现与矩阵规模, 请勿期望在其他机器上得到完全相同的数字。绝对耗时尤其容易受并发负载影响——BLAS 密集型任务受影响最大 (同一台机器在空闲窗口下, 同一脚本测得 MNIST 配置约为 2.5s 对 4.1s), 而加速比在不同负载下保持在 ~1.3-1.6x 区间。建议在自己的机器上重新运行 benchmark 后再下结论。两种模式的训练轨迹基本一致: 上述 CNN 配置训练两个 epoch 后, 两种模式的 loss 与准确率在小数点后四位完全相同。
+
+### 2.2 可选的 GPU 加速 (CuPy)
+本库额外提供了一个可选的 CuPy GPU 后端, 与 Cython 加速层遵循同样的哲学: 默认行为 (纯 NumPy) 与之前**完全一致**, GPU 加速按需开启、优雅降级 (未安装 CuPy 时发出警告并回退到 NumPy)。
+
+**安装** (选择与您的 CUDA 版本匹配的轮子; `cupy-cuda12x` 适用于驱动 >= 12.x 的所有机器, 例如 CUDA 13.0 驱动 + 12.1 工具链的环境):
+
+```
+pip install numpy-keras[cupy]        # 或: pip install cupy-cuda12x>=13.6.0
+```
+
+**开启 GPU 后端** (两种方式等价; 库在 import 时读取环境变量, `set_backend` 可以在 notebook 等已导入库的场景下随时切换):
+
+```
+export NUMPY_KERAS_BACKEND=cupy      # 方式一: 环境变量
+```
+
+```python
+import numpy_keras
+numpy_keras.set_backend("cupy")      # 方式二: 运行时切换
+```
+
+`numpy_keras.get_backend()` 返回当前后端 (`"numpy"` / `"cupy"`)。切换后无需手动搬移任何数据: 在 `fit` / `predict` / `evaluate` 入口, 模型会自动把参数、梯度、BatchNorm 统计量与优化器状态同步到当前设备 (双向); 随机数生成器、数据预处理 (洗牌、one-hot 编码) 与标签/指标运算始终留在主机端——因此**相同随机种子下, CPU 与 GPU 的初始权重、Dropout 掩码逐位相同**, 两条路径的一致性由 `tests/test_cupy.py` 直接校验 (44 个测试, 覆盖激活函数、全连接/卷积/池化、三种 RNN、四个优化器、端到端训练、有限差分梯度检查与后端切换)。数值上, GPU 的浮点归约顺序与 libm 与 NumPy 存在 ~1 ulp 级别的差异, 全库保持 float64 精度, 训练轨迹在小数点后 4-5 位内一致。
+
+**加速情况** (2× NVIDIA A800 80GB, Python 3.12.3, cupy-cuda12x 13.6.0; 由 `benchmarks/bench_cupy.py` 测得, 与纯 NumPy 路径对比): 矩阵密集的算子收益巨大——逐元素激活函数 61-203x, `Dense` 前向/反向 45-59x, 融合优化器内核 ~83x (与 Cython 内核同构: 一个参数数组一次 GPU 内核, 纯路径的逐算子启动开销占到了模型级耗时的 40%), 卷积与池化 5-13x。模型级 (`fit` 全程计时, 含主机侧数据准备; MLP 10000x784 [256,256,10], 3 轮, batch 64, 预热后取中位数; Cython 与 CuPy 是库的两个可选加速层, 编译了 Cython 内核的机器上 CPU 侧自动受益):
+
+| 配置 | 纯 NumPy | CPU + Cython | CuPy | GPU/纯 NumPy |
+|---|---|---|---|---|
+| 无 metrics | 2.47 s | 1.67 s | 0.78 s | ~3.2x |
+| + accuracy 指标 | 2.20 s | 2.13 s | 1.05 s | ~2.1x |
+| 教程脚本（带指标, `tutorials/code/13_cupy.py`） | — | 2.20 s | 1.20 s | ~1.8x |
+
+**已知例外: 教学规模下的 RNN 在 GPU 上反而更慢** (每时间步的 Python 循环由众多小内核启动主导; GPU 分支把输入投影批量化为一次 3D 矩阵乘, 但不足以抵消启动开销, 只有 N/T/U 很大时 GPU 才划算)。请在自己的机器上重新运行 benchmark 后再下结论。
+
+**计算精度**: `Sequential(..., dtype="float32")` 让模型以 float32 计算 (默认 float64)。参数、梯度与每一层输出都保持在所选精度——cupy 的 `clip`/`maximum` 会把 Python 标量转成 0 维 float64 悄悄提升精度, 库在激活函数输出与损失梯度两个咽喉处显式守住 dtype (见 `tests/test_float32.py` 的 9 个测试)。float32 把显存占用减半, 在消费级 GPU 上收益巨大 (如 RTX 4090 的 fp64 吞吐只有 fp32 的 1/64); 本机的 A800 因为 cuBLAS 对 f64 也走 FP64 tensor core, 教学规模下两者速度几乎相同 (实测 f64 1.10s / f32 1.15s, 准确率一致)。Cython 内核保持 float64-only, float32 模型自动走纯 NumPy 路径或融合 GPU 内核。
 
 ## :sparkles: 3. 其他数据集上的测试
 或许看到这里您会有一个疑问: 我们只在 MNIST 数据集上进行了测试, 从准确率上来看, 我们的模型表现得非常好。但是, 有没有可能是因为我们的模型在 MNIST 数据集上过拟合了呢? 那么在其他数据集上的表现如何呢?
@@ -803,3 +843,12 @@ history = model.fit(X, y, batch_size=32, epochs=10, shuffle=True)
       - **fix**: 修正 He (kaiming) 初始化的尺度与 SGD 的 Nesterov 更新。
       - **build**: 修复 `pyproject.toml` 的包发现, 并文档化 `pip install -e .`。
       - **test**: 新增初始化器回归测试, 测试套件现包含 244 个测试。
+  - v2.2.0
+    - 2026.08.16
+      - **feat**: 新增可选 CuPy GPU 后端 (`numpy_keras.set_backend` / 环境变量 `NUMPY_KERAS_BACKEND`): 参数/梯度/BatchNorm 统计量/优化器状态在 `fit`/`predict`/`evaluate` 入口自动双向同步, 随机数留在主机以保证同种子下两个后端逐位一致, 未安装 CuPy 时优雅降级; 奇偶校验由 `tests/test_cupy.py` 覆盖 (44 个测试)。
+      - **feat**: 新增融合 GPU 优化器内核 (`numpy_keras/optimizers/_gpu_kernels.py`, 与 Cython 内核同构: 一个参数数组一次 GPU 内核)。
+      - **feat**: 新增 float32 计算精度 (`Sequential(..., dtype="float32")`): 参数、梯度与每一层输出保持所选精度 (守住 cupy 标量提升 f64 的咽喉), `tests/test_float32.py` 覆盖 (9 个测试)。
+      - **feat**: 教程系列新增第 13 篇《CuPy GPU 加速》。
+      - **fix**: 修复 `autograd/` 子包 (Flatten 前向分派、`predict` 输出组装、best-weights 快照/恢复、未安装 `autograd` 库时的导入崩溃), 新增 `tests/test_autograd.py` (7 个测试)。
+      - **perf**: GPU 上 `predict` 改为设备端 argmax + 单次大前传; softmax 反传在 GPU 上使用收缩形式 (不物化雅可比, 绕开慢 einsum)。
+      - **test**: 测试套件现包含 315 个测试 (Cython 奇偶、GPU 奇偶、float32、autograd)。

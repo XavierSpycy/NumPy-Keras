@@ -64,6 +64,22 @@ def test_early_stopping_stops_training():
     assert model.stop_training
 
 
+def test_early_stopping_can_monitor_epoch_loss():
+    """monitor='loss' reads the epoch training loss (no metric needed)."""
+    np.random.seed(0)
+    rng = np.random.RandomState(0)
+    X = rng.randn(40, 2)
+    y = rng.randn(40, 1)
+
+    model = build_model(lr=0.0)  # frozen model: loss never improves
+    history = model.fit(
+        X, y, batch_size=8, epochs=20,
+        callbacks=[EarlyStopping(monitor="loss", patience=2)],
+    )
+    assert len(history.loss) < 20
+    assert model.stop_training
+
+
 def test_early_stopping_restore_best_weights():
     """With restore_best_weights=True the model must end with the parameters
     of the epoch where the monitored metric was best."""

@@ -19,12 +19,21 @@ from .. import (
     optimizers,
 )
 from ..cython import _kernels as _ck
+from .. import backend as _backend  # module: _backend.xp follows set_backend
+from ..backend import (
+    asarray,
+    asnumpy,
+    is_cupy_array,
+    is_numpy_array,
+    item,
+    on_gpu,
+)
 
 class Sequential:
     __idx2label = None
 
     def __init__(
-            self, 
+            self,
             layers: List[
                 Union[
                     layers.Activation,
@@ -40,10 +49,23 @@ class Sequential:
                     layers.SimpleRNN,
                 ]
             ] = [],
+            dtype=None,
         ) -> None:
+
+        """
+        Parameters:
+        - layers (list, optional): Layers of the model.
+        - dtype (optional): Compute dtype of the model, e.g. numpy.float32.
+          Default is None (float64, the library's historical default).
+          Parameters and per-batch inputs are cast to this dtype at build
+          / forward time; float32 saves memory and is the fast path on
+          GPUs (the Cython kernels stay float64-only and simply skip
+          float32 models).
+        """
 
         self.__layer_counter = defaultdict(int)
         self.__layers = {}
+        self.__dtype = None if dtype is None else np.dtype(dtype)
         for layer in layers:
             self.__layer_counter[layer.__class__.__name__] += 1
             layer_index = f"{utils.camel_to_snake(layer.__class__.__name__)}_{self.__layer_counter[layer.__class__.__name__]}"
@@ -107,8 +129,9 @@ class Sequential:
             batch_size: int = 32,
         ) -> List[np.float64]:
 
-        X = np.array(X).copy()
-        y = np.array(y).copy()
+        self.__sync_backend()
+        X = asnumpy(X) if is_cupy_array(X) else np.array(X).copy()
+        y = asnumpy(y) if is_cupy_array(y) else np.array(y).copy()
 
         y_hat = self.__forward(X, is_training=False)
         if self.__loss_func.name == 'sparse_categorical_crossentropy':
@@ -117,7 +140,7 @@ class Sequential:
             y_, _ = utils.one_hot_encode(y, self.__idx2label)
         else:
             y_ = y
-        loss = self.__loss_func(y_, y_hat)
+        loss = item(self.__loss_func(asarray(y_), y_hat))
 
         if self.__metrics:
             y_pred = self.predict(X, batch_size)
@@ -142,8 +165,9 @@ class Sequential:
             validation_freq: int = 1,
         ) -> callbacks.History:
 
-        X_train = np.array(X)
-        y_train = np.array(y)
+        self.__sync_backend()
+        X_train = asnumpy(X) if is_cupy_array(X) else np.array(X)
+        y_train = asnumpy(y) if is_cupy_array(y) else np.array(y)
         X_test = None
         y_test = None
 
@@ -208,7 +232,7 @@ class Sequential:
                     if not "val_loss" in self.__history.metrics:
                         self.__history.metrics["val_loss"] = []
                     self.__history.metrics["val_loss"].append(
-                        self.__loss_func(y_test, self.__forward(X_test, is_training=False))
+                        item(self.__loss_func(asarray(y_test), self.__forward(X_test, is_training=False)))
                     )
 
                 for metric in self.__metrics:
@@ -270,12 +294,39 @@ class Sequential:
             batch_size: int = 32,
         ) -> np.ndarray:
         
-        X = np.array(X).copy()
+        """
+        Predict on the given data.
+
+        The return type follows the model's task: with a
+        ``sparse_categorical_crossentropy`` loss the outputs are decoded
+        into integer class labels (an (N,) array via ``idx2label``); with
+        any other loss the raw network outputs are returned (an (N, ...)
+        array of the model's dtype, e.g. softmax probabilities).
+        """
+
+        self.__sync_backend()
+        X = asnumpy(X) if is_cupy_array(X) else np.array(X).copy()
         outputs = []
+        device_labels = []   # on-device argmax results; one transfer at the end
+        # On the device, per-batch looping only adds kernel-launch overhead:
+        # one big forward is simpler and faster (the only constraint is
+        # device memory, which fits any teaching-scale dataset).  On the
+        # host, keep the caller's batch size.
+        if on_gpu():
+            batch_size = max(batch_size, X.shape[0])
         for start_idx in range(0, X.shape[0], batch_size):
             end_idx = min(start_idx + batch_size, X.shape[0])
             batch_X = X[start_idx:end_idx]
             batch_output = self.__forward(batch_X, is_training=False)
+            if (self.__idx2label is not None and is_cupy_array(batch_output)
+                    and batch_output.ndim == 2):
+                # decode labels on the device and defer the transfer: only
+                # the small integer labels cross the bus, once, at the end
+                # (per-batch asnumpy of the full output matrix would stall
+                # the GPU pipeline on every batch)
+                device_labels.append(_backend.xp.argmax(batch_output, axis=1))
+                continue
+            batch_output = asnumpy(batch_output)  # back to the host for label decoding
             if self.__idx2label is not None:
                 if _ck is not None and batch_output.ndim == 2 and batch_output.dtype == np.float64:
                     batch_output = np.array([self.__idx2label[i] for i in _ck.argmax_rows(batch_output)])
@@ -284,6 +335,9 @@ class Sequential:
             elif batch_output.ndim == 2 and batch_output.shape[1] == 1:
                 batch_output = batch_output.flatten()
             outputs.append(batch_output)
+        if device_labels:
+            labels = asnumpy(_backend.xp.concatenate(device_labels))
+            outputs.insert(0, np.array([self.__idx2label[i] for i in labels]))
         return np.concatenate(outputs)
     
     def summary(self):
@@ -325,6 +379,21 @@ class Sequential:
                 layer.set_output_dim(output_dim)
             output_dim = layer.output_dim
             output_shape = getattr(layer, 'output_shape', None)
+
+        # Initializers always draw in float64; cast the freshly created
+        # state when the model asks for another compute dtype.
+        if self.__dtype is not None:
+            for layer in self.layers.values():
+                for attr in ("params", "grads"):
+                    d = getattr(layer, attr, None)
+                    if isinstance(d, dict):
+                        for key, value in d.items():
+                            if value.dtype != self.__dtype:
+                                d[key] = asarray(value, dtype=self.__dtype)
+                for attr in ("moving_mean", "moving_variance"):
+                    value = getattr(layer, attr, None)
+                    if value is not None and value.dtype != self.__dtype:
+                        setattr(layer, attr, asarray(value, dtype=self.__dtype))
     
     def __criterion(
             self,
@@ -334,25 +403,86 @@ class Sequential:
 
         if y.ndim == 1 and y_hat.ndim == 2:
             y = y.reshape(-1, 1)   # view; the loss functions only read y
+        y = asarray(y)             # move labels to the same device as y_hat
+        if y.dtype != y_hat.dtype:
+            # follow the model dtype, or a float64 y would promote a
+            # float32 model's loss/gradients back to float64
+            y = asarray(y, dtype=y_hat.dtype)
         loss = self.__loss_func(y, y_hat)
         grad = self.__loss_func.grad(y, y_hat)
+        if grad.dtype != y_hat.dtype:
+            # same promotion leak on the gradient side (loss functions
+            # like CCE clip with Python scalars)
+            grad = asarray(grad, dtype=y_hat.dtype)
         # Each layer chains through its own activation inside its backward,
         # so the criterion only computes the loss and its gradient w.r.t.
         # the network output.
-        return loss, grad
+        return item(loss), grad
 
     def __forward(
-            self, 
+            self,
             inputs,
             is_training: bool = True,
         ) -> np.ndarray:
-        
+
+        inputs = asarray(inputs)   # single entry point: host batches move here
+        if self.__dtype is not None and inputs.dtype != self.__dtype:
+            inputs = asarray(inputs, dtype=self.__dtype)
         for layer in self.layers.values():
             if not hasattr(layer, 'forward'):
                 continue
             output = layer.forward(inputs, is_training)
+            # keep the model dtype at every layer boundary: some backend
+            # ops (e.g. cupy's clip/maximum) promote float32 arrays to
+            # float64 when given Python scalar arguments
+            if self.__dtype is not None and output.dtype != self.__dtype:
+                output = asarray(output, dtype=self.__dtype)
             inputs = output
         return output
+
+    def __sync_backend(
+            self,
+        ) -> None:
+        """Reconcile model state (params/grads, BatchNorm stats, optimizer
+        state) with the active backend, in either direction.
+
+        Idempotent: arrays already on the right device pass through
+        unchanged.  Called at the entry of fit/predict/evaluate so models
+        built before a set_backend("cupy") switch -- or after switching
+        back to numpy -- keep working automatically.
+        """
+        def _sync(a):
+            if on_gpu():
+                return a if is_cupy_array(a) else asarray(a)
+            return asnumpy(a) if is_cupy_array(a) else a
+
+        for layer in self.layers.values():
+            for attr in ("params", "grads"):
+                d = getattr(layer, attr, None)
+                if isinstance(d, dict):
+                    for key, value in d.items():
+                        d[key] = _sync(value)
+            for attr in ("moving_mean", "moving_variance"):
+                value = getattr(layer, attr, None)
+                if value is not None:
+                    setattr(layer, attr, _sync(value))
+
+        # Optimizer moments/velocities are dicts created lazily on the
+        # first update; sync them too, or a backend switch mid-training
+        # would mix devices in the update.  Two shapes exist: nested
+        # {layer_index: {param: array}} (moments, velocity, ...) and flat
+        # {param: array} (SGD's velocity_prev) -- handle both.
+        opt = getattr(self, "optimizer", None)
+        if opt is not None:
+            for attr, value in vars(opt).items():
+                if isinstance(value, dict):
+                    for key, entry in value.items():
+                        if isinstance(entry, dict):
+                            for param, arr in entry.items():
+                                if is_numpy_array(arr) or is_cupy_array(arr):
+                                    entry[param] = _sync(arr)
+                        elif is_numpy_array(entry) or is_cupy_array(entry):
+                            value[key] = _sync(entry)
     
     def __backward(
             self, 

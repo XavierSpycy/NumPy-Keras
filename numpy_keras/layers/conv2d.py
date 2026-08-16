@@ -6,7 +6,13 @@ from typing import (
     Union,
 )
 
-import numpy as np
+import numpy as _np  # host-only math (e.g. output_dim's prod of a shape tuple)
+from ..backend import (
+    xp as np,
+    is_numpy_array,
+    scatter_add,
+    sliding_window_view,
+)
 
 from ..activations._mapper import _ActivationMapper
 from ..initializers._mapper import _InitializerMapper
@@ -182,7 +188,7 @@ class Conv2D:
         # appends the window axes at the end, so transpose them next to the
         # spatial axes first: the flattened column order must match
         # W.reshape(kh * kw * C, filters).
-        cols = np.lib.stride_tricks.sliding_window_view(x_pad, (kh, kw), axis=(1, 2))[:, ::sh, ::sw]
+        cols = sliding_window_view(x_pad, (kh, kw), axis=(1, 2))[:, ::sh, ::sw]
         cols = cols.transpose(0, 1, 2, 4, 5, 3)   # (N, OH, OW, kh, kw, C)
         N, OH, OW, _, _, C = cols.shape
         cols = cols.reshape(N * OH * OW, kh * kw * C)
@@ -190,6 +196,8 @@ class Conv2D:
         # Optional Cython fast path: matmul + activation fused in one kernel
         # (the column matrix is 2D -- the exact input type of dense_forward).
         if (_ck is not None
+                and is_numpy_array(inputs)
+                and is_numpy_array(self.params["W"])
                 and inputs.dtype == np.float64
                 and self.params["W"].dtype == np.float64
                 and not self.__activation_config
@@ -242,6 +250,8 @@ class Conv2D:
         # the pure path below.
         if (_ck is not None
                 and hasattr(_ck, 'col2im')
+                and is_numpy_array(grad)
+                and is_numpy_array(self.inputs)
                 and grad.dtype == np.float64
                 and self.inputs.dtype == np.float64
                 and self.params["W"].dtype == np.float64
@@ -301,7 +311,7 @@ class Conv2D:
         grad_cols_flat = grad_cols.reshape(N * M, kh * kw, C)
         for i in range(kh):
             for j in range(kw):
-                np.add.at(
+                scatter_add(
                     grad_padded,
                     (n_idx, i_idx * sh + i, j_idx * sw + j, slice(None)),
                     grad_cols_flat[:, i * kw + j, :])
@@ -335,7 +345,7 @@ class Conv2D:
 
     @property
     def output_dim(self):
-        return int(np.prod(self.__output_shape))
+        return int(_np.prod(self.__output_shape))
 
     @property
     def output_shape(self):

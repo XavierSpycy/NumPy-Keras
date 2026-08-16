@@ -43,7 +43,12 @@ $$h_t = \text{act}(x_t W_{xh} + h_{t-1} W_{hh} + b)$$
         self.grads["W_hh"] = np.zeros_like(self.params["W_hh"])
         if "b" in self.grads:
             self.grads["b"] = np.zeros_like(self.params["b"])
+```
 
+（两段之间夹着 CuPy 后端的 GPU 分支——把输入投影的梯度累加批量化成一次 `tensordot`，只对设备上的张量生效；纯 NumPy 路径不受影响，仍是下面的时间步循环。）
+
+```python
+# excerpt: numpy_keras/layers/simple_rnn.py
         dX = np.empty_like(self.inputs)
         dh = np.zeros((N, U))          # gradient through h_t from the future
         for t in range(T - 1, -1, -1):

@@ -5,7 +5,8 @@ from typing import (
     Tuple,
 )
 
-import numpy as np
+import numpy as _np  # host-only math (output_dim's prod of a shape tuple)
+from ..backend import xp as np, is_cupy_array
 
 from ..activations._mapper import _ActivationMapper
 from ..initializers._mapper import _InitializerMapper
@@ -167,6 +168,39 @@ class GRU:
         N, T, _ = inputs.shape
         U = self.__units
 
+        if is_cupy_array(inputs):
+            # GPU path: batch the input projection over all timesteps into a
+            # single 3D matmul, so only the recurrence stays in the loop.
+            pre_x = inputs @ self.params["W_xh"]           # (N, T, 3U)
+            h = np.zeros((N, U))
+            z_seq = np.empty((N, T, U))
+            r_seq = np.empty((N, T, U))
+            h_tilde_seq = np.empty((N, T, U))
+            h_seq = np.empty((N, T, U))
+            for t in range(T):
+                pre = pre_x[:, t, :] + h @ self.params["W_hh"]
+                if "b" in self.params:
+                    pre = pre + self.params["b"]
+                z = self.__activation_mapper[self.__recurrent_activation](
+                    pre[:, :U], **self.__recurrent_activation_config)
+                r = self.__activation_mapper[self.__recurrent_activation](
+                    pre[:, U:2 * U], **self.__recurrent_activation_config)
+                cand = pre_x[:, t, 2 * U:] + (r * h) @ self.params["W_hh"][:, 2 * U:]
+                if "b" in self.params:
+                    cand = cand + self.params["b"][2 * U:]
+                h_tilde = self.__activation_mapper[self.__activation](cand, **self.__activation_config)
+                h = (1 - z) * h + z * h_tilde
+                z_seq[:, t, :] = z
+                r_seq[:, t, :] = r
+                h_tilde_seq[:, t, :] = h_tilde
+                h_seq[:, t, :] = h
+            self.inputs = inputs
+            self.__z_seq = z_seq
+            self.__r_seq = r_seq
+            self.__h_tilde_seq = h_tilde_seq
+            self.__h_seq = h_seq
+            return h_seq if self.__return_sequences else h
+
         h = np.zeros((N, U))
         z_seq = np.empty((N, T, U))
         r_seq = np.empty((N, T, U))
@@ -241,6 +275,47 @@ class GRU:
         if "b" in self.grads:
             self.grads["b"] = np.zeros_like(self.params["b"])
 
+        if is_cupy_array(grad):
+            # GPU path: BPTT loops over the recurrence only; the W_xh
+            # accumulation and dX are batched into single ops afterwards.
+            dz_seq = np.empty((N, T, U))
+            dr_seq = np.empty((N, T, U))
+            dht_seq = np.empty((N, T, U))
+            dh = np.zeros((N, U))
+            for t in range(T - 1, -1, -1):
+                dh = dh + d_out[:, t, :]
+                z = self.__z_seq[:, t, :]
+                r = self.__r_seq[:, t, :]
+                h_tilde = self.__h_tilde_seq[:, t, :]
+                h_prev = np.zeros((N, U)) if t == 0 else self.__h_seq[:, t - 1, :]
+                dz = dh * (h_tilde - h_prev) * self.__gate_deriv(z, **self.__recurrent_activation_config)
+                dh_tilde = dh * z * self.__cand_deriv(h_tilde, **self.__activation_config)
+                r_h = r * h_prev
+                dr = (dh_tilde @ self.params["W_hh"][:, 2 * U:].T) * h_prev * self.__gate_deriv(r, **self.__recurrent_activation_config)
+                dh_prev = dh * (1 - z) \
+                    + (dh_tilde @ self.params["W_hh"][:, 2 * U:].T) * r \
+                    + dz @ self.params["W_hh"][:, :U].T \
+                    + dr @ self.params["W_hh"][:, U:2 * U].T
+                self.grads["W_hh"][:, :U] += h_prev.T @ dz
+                self.grads["W_hh"][:, U:2 * U] += h_prev.T @ dr
+                self.grads["W_hh"][:, 2 * U:] += r_h.T @ dh_tilde
+                if "b" in self.grads:
+                    self.grads["b"][:U] += dz.sum(axis=0)
+                    self.grads["b"][U:2 * U] += dr.sum(axis=0)
+                    self.grads["b"][2 * U:] += dh_tilde.sum(axis=0)
+                dz_seq[:, t, :] = dz
+                dr_seq[:, t, :] = dr
+                dht_seq[:, t, :] = dh_tilde
+                dh = dh_prev
+            # sum_t x_t^T (gate grad)_t in three batched reductions
+            self.grads["W_xh"][:, :U] = np.tensordot(self.inputs, dz_seq, axes=([0, 1], [0, 1]))
+            self.grads["W_xh"][:, U:2 * U] = np.tensordot(self.inputs, dr_seq, axes=([0, 1], [0, 1]))
+            self.grads["W_xh"][:, 2 * U:] = np.tensordot(self.inputs, dht_seq, axes=([0, 1], [0, 1]))
+            # and all dX rows at once from the three projection slices
+            return (dht_seq @ self.params["W_xh"][:, 2 * U:].T
+                    + dz_seq @ self.params["W_xh"][:, :U].T
+                    + dr_seq @ self.params["W_xh"][:, U:2 * U].T)
+
         dX = np.empty_like(self.inputs)
         dh = np.zeros((N, U))
 
@@ -304,7 +379,7 @@ class GRU:
 
     @property
     def output_dim(self):
-        return int(np.prod(self.__output_shape))
+        return int(_np.prod(self.__output_shape))
 
     @property
     def output_shape(self):

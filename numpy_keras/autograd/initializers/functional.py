@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import Tuple
 
 try:
@@ -20,11 +21,19 @@ def ones(shape: Tuple[int, int]) -> np.ndarray:
 def zeros(shape: Tuple[int, int]) -> np.ndarray:
     return np.zeros(shape)
 
-def xaiver_uniform(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
+def xavier_uniform(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
     return gain * np.random.uniform(low=-np.sqrt(6 / (shape[0] + shape[1])), high=np.sqrt(6 / (shape[0] + shape[1])), size=shape)
 
-def xaiver_normal(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
+def xavier_normal(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
     return gain * np.random.normal(loc=0.0, scale=np.sqrt(2 / (shape[0] + shape[1])), size=shape)
+
+
+# Misspelled historical names, kept for backward compatibility.
+def xaiver_uniform(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
+    return xavier_uniform(shape, gain)
+
+def xaiver_normal(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
+    return xavier_normal(shape, gain)
 
 def kaiming_uniform(shape: Tuple[int, int], mode: str = 'fan_in') -> np.ndarray:
     return np.random.uniform(low=-np.sqrt(6/(shape[0] if mode == 'fan_in' else shape[1])), high=np.sqrt(6/(shape[0] if mode == 'fan_in' else shape[1])), size=shape)

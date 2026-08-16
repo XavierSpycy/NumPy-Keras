@@ -70,12 +70,21 @@ $$\frac{\partial L}{\partial W_2} = a_1^\top \cdot \frac{\partial L}{\partial z_
 
 ```python
 # excerpt: numpy_keras/models/sequential.py
+        y = asarray(y)             # move labels to the same device as y_hat
+        if y.dtype != y_hat.dtype:
+            # follow the model dtype, or a float64 y would promote a
+            # float32 model's loss/gradients back to float64
+            y = asarray(y, dtype=y_hat.dtype)
         loss = self.__loss_func(y, y_hat)
         grad = self.__loss_func.grad(y, y_hat)
+        if grad.dtype != y_hat.dtype:
+            # same promotion leak on the gradient side (loss functions
+            # like CCE clip with Python scalars)
+            grad = asarray(grad, dtype=y_hat.dtype)
         # Each layer chains through its own activation inside its backward,
         # so the criterion only computes the loss and its gradient w.r.t.
         # the network output.
-        return loss, grad
+        return item(loss), grad
 ```
 
 这个"每层自持"的约定有一个漂亮的副作用：**任何层插在任何位置都天然正确**。BatchNormalization、Dropout、自定义层——它们不需要知道上游是什么激活，上游也不关心它们改不改值。每个激活导数恰好被应用一次，**由构造保证**。RNN 层也遵循同一约定：门与候选的导数在 backward 里逐时间步应用（它们的 `activation` 属性只是自省标记，返回 None）。

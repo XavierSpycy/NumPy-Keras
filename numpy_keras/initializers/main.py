@@ -9,11 +9,11 @@ class Constant:
 
 class GlorotNormal:
     def __call__(self, shape):
-        return F.xaiver_normal(shape)
+        return F.xavier_normal(shape)
 
 class GlorotUniform:
     def __call__(self, shape):
-        return F.xaiver_uniform(shape)
+        return F.xavier_uniform(shape)
     
 class HeNormal:
     def __call__(self, shape):

@@ -4,7 +4,7 @@ from typing import (
     Optional
 )
 
-import numpy as np
+from ..backend import xp as np, is_numpy_array
 
 from ..activations._mapper import _ActivationMapper
 from ..initializers._mapper import _InitializerMapper
@@ -118,7 +118,10 @@ class Dense:
         - is_training (bool): Whether the model is training or not.
         """
 
-        if (_ck is not None and inputs.ndim == 2
+        # The Cython kernels are CPU-only: device arrays take the pure path.
+        if (_ck is not None and is_numpy_array(inputs)
+                and is_numpy_array(self.params["W"])
+                and inputs.ndim == 2
                 and inputs.dtype == np.float64
                 and self.params["W"].dtype == np.float64
                 and not self.__activation_config
@@ -146,7 +149,9 @@ class Dense:
         - grad (ndarray): The gradient of the loss.
         """
 
-        if (_ck is not None and grad.ndim == 2
+        if (_ck is not None and is_numpy_array(grad)
+                and is_numpy_array(self.inputs)
+                and grad.ndim == 2
                 and grad.dtype == np.float64
                 and self.inputs.ndim == 2
                 and self.inputs.dtype == np.float64

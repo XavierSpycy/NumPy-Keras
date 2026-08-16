@@ -1,3 +1,4 @@
+from __future__ import annotations
 from collections import defaultdict
 from typing import (
     List, 
@@ -224,17 +225,22 @@ class Sequential:
                         model=self,
                     )
 
-                    if hasattr(callback, 'save_best_weight') and callback.save_best_weight:
-                        self.__best_weights = self.parameters # {idx: {key: param for key, param in layer.params.items()} for idx, layer in self.layers.items() if hasattr(layer, 'params')}
-            
+                    if hasattr(callback, 'save_best') and callback.save_best:
+                        # copy the arrays: optimizers update params in place,
+                        # so keeping references would alias later epochs
+                        self.__best_weights = {
+                            idx: {param: value.copy() for param, value in layer.params.items()}
+                            for idx, layer in self.layers.items() if hasattr(layer, 'params')
+                        }
+
             if self.stop_training:
                 break
-        
+
         if self.__best_weights is not None:
-                for idx, layer in self.parameters:
-                    for param in layer.params:
-                        self.__layers[idx].params[param] = self.__best_weights[idx][param]
-        
+            for idx, params in self.__best_weights.items():
+                for param, value in params.items():
+                    self.__layers[idx].params[param] = value
+
         return self.history
 
     def pop(
@@ -252,19 +258,20 @@ class Sequential:
         ) -> np.ndarray:
         
         X = np.array(X).copy()
-        output = np.zeros(X.shape[0])
+        outputs = []
         for start_idx in range(0, X.shape[0], batch_size):
             end_idx = min(start_idx + batch_size, X.shape[0])
             batch_X = X[start_idx:end_idx]
             batch_output = self.__forward(batch_X, is_training=False)
-            if batch_output.ndim == 2 and batch_output.shape[1] == 1:
-                batch_output = batch_output.flatten()
+            # unbox autograd tracer outputs defensively (predict never
+            # needs a gradient)
+            batch_output = getattr(batch_output, '_value', batch_output)
             if self.__idx2label is not None:
                 batch_output = np.array([self.__idx2label[np.argmax(pred, axis=0)] for pred in batch_output])
-            if isinstance(batch_output, np.numpy_boxes.ArrayBox):
-                batch_output = batch_output._value
-            output[start_idx:end_idx] = batch_output
-        return output
+            elif batch_output.ndim == 2 and batch_output.shape[1] == 1:
+                batch_output = batch_output.flatten()
+            outputs.append(batch_output)
+        return np.concatenate(outputs)
     
     def summary(self):
         print("Model: Sequential")
@@ -317,11 +324,8 @@ class Sequential:
         for layer in self.layers.values():
             if not hasattr(layer, 'forward'):
                 continue
-            elif isinstance(layer, layers.Flatten):
-                inputs = layer.flatten(inputs)
-            else:
-                output = layer.forward(inputs, is_training)
-                inputs = output
+            output = layer.forward(inputs, is_training)
+            inputs = output
         return output
     
     def __get_params(

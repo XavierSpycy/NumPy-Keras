@@ -15,7 +15,7 @@
 
 ```python
 # excerpt: numpy_keras/layers/conv2d.py
-        cols = np.lib.stride_tricks.sliding_window_view(x_pad, (kh, kw), axis=(1, 2))[:, ::sh, ::sw]
+        cols = sliding_window_view(x_pad, (kh, kw), axis=(1, 2))[:, ::sh, ::sw]
         cols = cols.transpose(0, 1, 2, 4, 5, 3)   # (N, OH, OW, kh, kw, C)
         N, OH, OW, _, _, C = cols.shape
         cols = cols.reshape(N * OH * OW, kh * kw * C)

@@ -34,8 +34,8 @@ Total params: 49,530
 # excerpt: 初始化器尺度表
 print("初始化器尺度 (shape=(64, 128), fan_in=64, fan_out=128):")
 INITIALIZERS = [
-    ("glorot_uniform", F.xaiver_uniform),
-    ("glorot_normal", F.xaiver_normal),
+    ("glorot_uniform", F.xavier_uniform),
+    ("glorot_normal", F.xavier_normal),
     ("he_uniform", F.kaiming_uniform),
     ("he_normal", F.kaiming_normal),
     ("random_uniform", lambda s: F.uniform(s, -0.05, 0.05)),
@@ -171,8 +171,8 @@ np.random.seed(0)
 # 1. 各初始化器的实际尺度（同一个形状）
 print("初始化器尺度 (shape=(64, 128), fan_in=64, fan_out=128):")
 INITIALIZERS = [
-    ("glorot_uniform", F.xaiver_uniform),
-    ("glorot_normal", F.xaiver_normal),
+    ("glorot_uniform", F.xavier_uniform),
+    ("glorot_normal", F.xavier_normal),
     ("he_uniform", F.kaiming_uniform),
     ("he_normal", F.kaiming_normal),
     ("random_uniform", lambda s: F.uniform(s, -0.05, 0.05)),
@@ -296,8 +296,7 @@ fig.savefig(ASSETS / "06_deep_mlp_history.png", dpi=150)
 plt.close(fig)
 
 print("图片已保存: tutorials/assets/06_initializer_compare.png, "
-      "tutorials/assets/06_deep_mlp_history.png")
-```
+      "tutorials/assets/06_deep_mlp_history.png")```
 
 完整运行输出（编译内核模式）：
 

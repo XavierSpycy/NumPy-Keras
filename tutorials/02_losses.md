@@ -55,12 +55,21 @@ $$L = -\frac{1}{N}\sum_i \sum_c y_{i,c} \log \hat y_{i,c}$$
 
 ```python
 # excerpt: numpy_keras/models/sequential.py
+        y = asarray(y)             # move labels to the same device as y_hat
+        if y.dtype != y_hat.dtype:
+            # follow the model dtype, or a float64 y would promote a
+            # float32 model's loss/gradients back to float64
+            y = asarray(y, dtype=y_hat.dtype)
         loss = self.__loss_func(y, y_hat)
         grad = self.__loss_func.grad(y, y_hat)
+        if grad.dtype != y_hat.dtype:
+            # same promotion leak on the gradient side (loss functions
+            # like CCE clip with Python scalars)
+            grad = asarray(grad, dtype=y_hat.dtype)
         # Each layer chains through its own activation inside its backward,
         # so the criterion only computes the loss and its gradient w.r.t.
         # the network output.
-        return loss, grad
+        return item(loss), grad
 ```
 
 softmax 层的 backward 拿到 ∂L/∂ŷ 后，用**雅可比乘积**穿回 logits——softmax 没有逐元素导数，这是唯一正确的穿法。动手验证（`np.random.seed(0)`）：
