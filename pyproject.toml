@@ -2,10 +2,13 @@
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+include = ["numpy_keras*"]
+
 [project]
 name = "numpy-keras"
-version = "2.0.0"
-description = "A Multilayer Perceptron from scratch using NumPy. Offers almost all basic functionalities. Suitable for classification and regression tasks."
+version = "2.1.0"
+description = "A deep learning library from scratch using NumPy — MLP, CNN and RNN (SimpleRNN/LSTM/GRU) — written to read like a textbook."
 authors = [{ name="Jiarui Xu", email="xujiarui98@foxmail.com" }]
 dependencies = [
     "numpy==1.26.4"

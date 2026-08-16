@@ -7,7 +7,7 @@
   <b>NumPy-Keras</b>
 </p>
 
-**NumPy-Keras**, 原名 **NumPyMultilayerPerceptron**, 是一个用 `numpy` 实现的多层感知器(MLP)的库。它的目的是为了提供一个简单的、易于理解的实现, 以便于学习和教学。
+**NumPy-Keras**, 原名 **NumPyMultilayerPerceptron**, 是一个纯 `numpy` 实现的深度学习库, 覆盖经典架构三部曲——多层感知机、卷积网络与循环网络 (SimpleRNN/LSTM/GRU)。它的目的是为了提供一个简单的、易于理解的实现, 以便于学习和教学。
 
 <p align="center">
   <img src="figures/MLP.jpg">
@@ -26,7 +26,7 @@
   - 进度条功能 (需要安装 `tqdm` 库)
   - 绘制训练历史的功能 (需要安装 `matplotlib` 库)
   - 自动求导功能 (需要安装 `autograd` 库)
-  - 如果您只对多层感知机如何具体实现感兴趣, 那么仅考虑 `numpy` 库即可, 并且我们采用惰性导入和异常捕捉的方式来避免您未安装相关库时的错误。<u> **再次强调**: 您只需要 `numpy` 库就可以运行这个库。</u>
+  - 如果您只对各架构的具体实现感兴趣, 那么仅考虑 `numpy` 库即可, 并且我们采用惰性导入和异常捕捉的方式来避免您未安装相关库时的错误。<u> **再次强调**: 您只需要 `numpy` 库就可以运行这个库。</u>
 
 ## 目录
 - [0. 快速开始](#sparkles-0-快速开始)
@@ -75,13 +75,15 @@ conda create -n numpy_keras python=3.12 -y
 conda activate numpy_keras
 ```
 
-- 安装依赖。
+- 安装库本身 (editable 模式, 源码修改即时生效):
 
 ```bash
-pip3 install -r requirements.txt
+pip install -e .
 ```
 
-为了避免安装额外功能所需的依赖, 我们将除 `numpy` 外的依赖通过 `#` 注释掉了。如果您需要这些功能, 您可以取消注释, 并重新运行 `pip3 install -r requirements.txt`。
+- 按需安装额外功能所需的依赖。
+
+为了避免安装额外功能所需的依赖, 我们将 `requirements.txt` 中除 `numpy` 外的依赖通过 `#` 注释掉了。如果您需要这些功能, 您可以取消注释, 并重新运行 `pip install -r requirements.txt`。
 
 如果您使用的是 `miniconda`, 您可能还需要额外安装 `Jupyter Notebook` 相关的依赖。
 
@@ -89,12 +91,33 @@ pip3 install -r requirements.txt
 pip3 install jupyter ipywidgets
 ```
 
-- 最后, 您可以通过 [notebooks](notebooks) 文件夹中的 Jupyter Notebook 来学习如何使用这个库。
+- 最后, 您可以通过 [系列教程](tutorials/00_quickstart.md) 或 [notebooks](notebooks) 文件夹中的 Jupyter Notebook 来学习如何使用这个库。
+
+### 0.1 系列教程
+`tutorials/` 中的中文教程系列从零构建整个三部曲, 每篇一个概念, 附带完整可运行代码与实测数字:
+
+| # | 文章 | 主题 |
+|---|---|---|
+| 00 | 五分钟上手 | 诚实的训练/测试划分, 第一个 MNIST 模型 |
+| 01 | 激活函数全解 | 17 个激活函数、定义在后激活值上的导数、梯度消失 |
+| 02 | 损失函数 | MSE 与交叉熵、softmax+CE 的合体梯度 |
+| 03 | 反向传播逐行拆解 | 链式法则穿过 `Sequential`、有限差分梯度校验、autograd 对照 |
+| 04 | 优化器进化史 | SGD → Momentum → NAG → Adagrad → Adadelta → Adam |
+| 05 | 学习率与九大调度器 | lr 扫描、九个调度器、ReduceLROnPlateau + EarlyStopping |
+| 06 | MLP 深入 | 初始化器尺度与 12 层深网 |
+| 07 | Dropout | 倒置 Dropout 与过拟合对比 |
+| 08 | BatchNormalization | 训练/推理双模式与滑动统计量 |
+| 09 | CNN 解剖 | im2col、LeNet 与特征图 |
+| 10 | RNN 三部曲 | SimpleRNN/LSTM/GRU 与 BPTT |
+| 11 | 引擎室 (可选) | 层的鸭子类型契约、新增一层 |
+| 12 | Cython 加速 (可选) | 编译内核与基准方法学 |
+
+每篇文章独立成文, 其代码与 `tutorials/code/*.py` 逐字节一致; 完整索引与知乎/CSDN 发布清单见 [tutorials/README.md](tutorials/README.md)。
 
 ## :sparkles: 1. 引言
 多层感知机 (MLP) 是一种最基本的神经网络模型。它由一个输入层、一个或多个隐藏层和一个输出层组成。每一层都由多个神经元组成, 每个神经元都有一个激活函数。MLP 是一种前馈神经网络, 它的输出是由输入层到输出层的前向传播计算得到的。
 
-当前主流的深度学习框架, 如 `TensorFlow`, `PyTorch` 等, 都提供了高效的实现, 但是这些框架的底层实现是复杂的, 并且很难理解。因此, 为了更好地理解深度学习的原理, 我们提供了一个用 `NumPy` 实现的多层感知机框架。
+当前主流的深度学习框架, 如 `TensorFlow`, `PyTorch` 等, 都提供了高效的实现, 但是这些框架的底层实现是复杂的, 并且很难理解。因此, 为了更好地理解深度学习的原理, 我们用 `NumPy` 从零实现了经典架构——MLP、CNN 与 RNN (SimpleRNN/LSTM/GRU), 内部实现刻意写得像教科书。
 
 我们提到了 `Keras` 是因为我们的实现受到了 `Keras` 接口的启发。从接口的角度来看, `Keras` 提供了高级的接口, 使得用户可以很容易地构建神经网络模型, 非常适合初学者, 因为它简单, 且易于理解。也正因此, `TensorFlow` 2.0 以及之后的版本, 也采用了 `Keras` 作为其高级接口。
 
@@ -125,10 +148,28 @@ model.evaluate(x_test, y_test)
 而当使用我们的框架时, 我们可以看到如下的代码示例:
 
 ```python
+import csv
+import itertools
+
+import numpy as np
 import numpy_keras as keras
 
-X_train, y_train, X_test, y_test = mnist_load_data()
-X_train, X_test = X_train / 255.0, X_test / 255.0
+
+def load_mnist(path, n_rows=None):
+    """读取 label-first 的 MNIST CSV: 第一列是标签, 其余 784 列是像素 (0-255)。"""
+    with open(path) as f:
+        rows = list(itertools.islice(csv.reader(f), n_rows))
+    y = np.array([int(r[0]) for r in rows])
+    X = np.array([[float(v) for v in r[1:]] for r in rows]) / 255.0
+    return X, y
+
+
+# 训练集与测试集来自两个不同的文件。
+np.random.seed(0)
+X_train, y_train = load_mnist("data/mnist_train_small.csv", n_rows=5000)
+X_test, y_test = load_mnist("data/mnist_test.csv", n_rows=1000)
+X_train = X_train.reshape(-1, 28, 28)
+X_test = X_test.reshape(-1, 28, 28)
 
 model = keras.models.Sequential([
     keras.layers.Flatten(input_shape=(28, 28)),
@@ -144,9 +185,9 @@ model.compile(optimizer='adam',
 history = model.fit(X_train, y_train, epochs=5, verbose=1)
 print(f"Accuracy on the training set: {model.evaluate(X_train, y_train):.2%}")
 print(f"Accuracy on the test set: {model.evaluate(X_test, y_test):.2%}")
-# Outputs:
-# Accuracy on the training set: 98.52%
-# Accuracy on the test set: 98.52%
+# 输出 (np.random.seed(0), 纯 NumPy 模式, Apple M2 Pro):
+# Accuracy on the training set: 96.72%
+# Accuracy on the test set: 93.30%
 ```
 
 我们可以看到, 我们的框架与 `Keras` 的接口非常相似, 这使得初学者可以参考比较成熟的框架, 自行动手搭建并训练神经网络模型。
@@ -167,7 +208,7 @@ print(f"Accuracy on the test set: {model.evaluate(X_test, y_test):.2%}")
 总之, 我们的框架是一个轻量级的框架, 仅依赖 `numpy` 库, 并且提供了一个简单的、易于理解的实现。我们希望这个框架能够帮助用户更好地理解深度学习的原理, 并且能够更好地使用深度学习框架。
 
 ## :sparkles: 2. 依赖
-由于我们并未进行广泛的测试, 因此我们无法保证在特定版本的 `Python` 和 `numpy` 上能够正常运行。不过, 我们列出我们的开发环境, 以供参考:
+[tests](tests) 中提供了 `pytest` 测试套件, 覆盖各层、损失函数、优化器、回调以及 CNN/RNN 路径 (`python -m pytest tests/ -q`, 当前 241 个测试)。本库在以下环境中开发与测试:
 - Python 3.12.1
 - numpy 1.26.4
 
@@ -436,14 +477,14 @@ import numpy as np
 
 np.random.seed(42)
 
-X_train = np.load('data/train_data.npy')
-y_train = np.load('data/train_label.npy').squeeze()
+X_train = np.load('data/train_data.npy')[:10000]
+y_train = np.load('data/train_label.npy').squeeze()[:10000]
 X_test = np.load('data/test_data.npy')
 y_test = np.load('data/test_label.npy').squeeze()
 print(X_train.shape, y_train.shape, X_test.shape, y_test.shape)
 ```
 
-总的来说, 我们的数据集包含了 50,000 个训练样本和 10,000 个测试样本, 特征维度为 128。
+总的来说, 我们的数据集包含了 50,000 个训练样本和 10,000 个测试样本, 特征维度为 128。下面的示例在训练集前 10,000 个样本上训练, 让整个实验在普通笔记本上几分钟内即可复现; 去掉切片即可使用全部 50,000 个样本 (参考机器上完整 60 轮预算约需 35-45 分钟)。
 
 #### 3.2.2 构建模型
 这里, 我们使用 `numpy_keras` 来构建一个多层感知机 (MLP) 模型。我们将使用一个包含 12 个隐藏层的模型。我们将使用 `ELU` 激活函数, 并使用 `He` 均匀分布初始化器来初始化权重。我们还将使用 `Dropout` 层来减少过拟合。
@@ -476,12 +517,12 @@ model.add(keras.layers.Dense(10, activation='softmax'))
 </p>
 
 #### 3.2.3 编译模型
-我们使用 `Adam` 优化器来编译我们的模型, 并使用 `SparseCategoricalCrossentropy` 作为损失函数, 以及 `Accuracy` 作为评估指标。此外, 我们还将使用 `EarlyStopping` 和 `ReduceLROnPlateau` 回调函数来提高模型性能。
+我们使用 `Adam` 优化器和 `SparseCategoricalCrossentropy` 损失函数。这里刻意不传 `metrics`: 每个指标都会在每轮 epoch 结束时触发一次全量数据预测, 对 50,000 个样本而言开销几乎与训练本身相当。因此回调函数改为监控 `val_loss` (只要有验证数据就会记录), 最终准确率在训练结束后一次性计算。
 
 ```python
-early_stop = keras.callbacks.EarlyStopping('val_accuracy', mode='max', patience=5, restore_best_weights=True)
-lr_scheduler = keras.callbacks.ReduceLROnPlateau('val_accuracy', mode='max', factor=0.5, patience=3, min_lr=1e-6)
-model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+early_stop = keras.callbacks.EarlyStopping('val_loss', mode='min', patience=5, restore_best_weights=True)
+lr_scheduler = keras.callbacks.ReduceLROnPlateau('val_loss', mode='min', factor=0.5, patience=3, min_lr=1e-6)
+model.compile(optimizer='adam', loss='sparse_categorical_crossentropy')
 ```
 
 #### 3.2.4 训练模型
@@ -491,21 +532,18 @@ model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=
 history = model.fit(X_train, y_train, epochs=60, batch_size=128, verbose=1, callbacks=[early_stop, lr_scheduler], validation_split=0.1)
 ```
 
-- 性能
-  - 准确率 (训练集): 62.14%
-  - 准确率 (测试集): 55.35%
-- 早停轮次: 33
+- 性能 (10,000 样本子集, `np.random.seed(42)`, 编译内核, Apple M2 Pro)
+  - 准确率 (训练集): 59.75%
+  - 准确率 (测试集): 45.71%
+- 早停轮次: 46
 
-##### 验证集作为验证集
+##### 测试集作为验证集
+
+也可以直接把测试集当作验证数据传入, 配方完全一致, 主要区别在于早停发生的轮次:
 
 ```python
 history = model.fit(X_train, y_train, epochs=60, batch_size=128, verbose=1, callbacks=[early_stop, lr_scheduler], validation_data=(X_test, y_test))
 ```
-
-- 性能
-  - 准确率 (训练集): 64.98%
-  - 准确率 (测试集): 56.02%
-- 早停轮次: 51
 
 #### 3.2.5 可视化训练历史
 
@@ -646,8 +684,9 @@ import numpy as np
 from numpy_keras import Sequential
 from numpy_keras import layers
 
+np.random.seed(0)
 with open("data/mnist_train_small.csv") as f:
-    rows = list(csv.reader(f))
+    rows = list(csv.reader(f))[:2000]    # 只取 20,000 行中的前 2,000 行
 X = np.array([[float(v) for v in r[1:]] for r in rows]) / 255.0
 y = np.array([int(r[0]) for r in rows])
 X = X.reshape(-1, 28, 28, 1)             # (N, H, W, C)
@@ -665,7 +704,9 @@ model.compile(loss="sparse_categorical_crossentropy", optimizer="adam",
               metrics=["accuracy"])
 
 history = model.fit(X, y, batch_size=32, epochs=2, shuffle=True)
-# 2000 个样本训练 2 个 epoch 后训练集准确率约为 93%
+# 2,000 个样本训练 2 个 epoch 后训练集准确率为 93.20%
+# (np.random.seed(0), 纯 NumPy 模式)。同一模型在 data/mnist_test.csv
+# 的前 1,000 行上达到 89.30%。
 ```
 
 同样的图像也可以按行读成一个序列 —— 28 个时间步, 每步 28 个像素:
@@ -754,3 +795,10 @@ history = model.fit(X, y, batch_size=32, epochs=10, shuffle=True)
         - **feat**: 提供了更多的回调功能, 便于优化模型性能;
         - **feat**: 提供了 `autograd` 功能, 可以自动计算梯度, 避免手动计算, 同时提供了更多的激活函数;
         - **docs**: 完成了所有模块的文档字符串, 增强了整个代码库的清晰度和开发者理解。
+  - v2.1.0
+    - 2026.08.15
+      - **feat**: 新增 RNN 层族 — `SimpleRNN`、`LSTM` 与 `GRU` (纯 NumPy BPTT)。
+      - **feat**: 在 `tutorials/` 新增中文教程系列 (快速上手、激活函数、损失函数、反向传播、优化器、学习率、MLP 等)。
+      - **fix**: 修正 He (kaiming) 初始化的尺度与 SGD 的 Nesterov 更新。
+      - **build**: 修复 `pyproject.toml` 的包发现, 并文档化 `pip install -e .`。
+      - **test**: 新增初始化器回归测试, 测试套件现包含 241 个测试。

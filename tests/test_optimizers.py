@@ -121,3 +121,21 @@ def test_optimizer_mapper():
     assert isinstance(optimizers._OptimMapper()["adam"], optimizers.Adam)
     assert isinstance(optimizers._OptimMapper()["adagrad"], optimizers.Adagrad)
     assert isinstance(optimizers._OptimMapper()["adadelta"], optimizers.Adadelta)
+
+
+def test_sgd_nesterov_follows_standard_nag_update():
+    """NAG must update as theta -= m*v_prev - (1+m)*v_new.  With the
+    lookahead sign flipped (the old bug) this sequence diverges on
+    f(x) = 0.5 x^2 instead of converging."""
+    layer = set_grads(FakeLayer(w=np.array([1.0])), w=np.array([1.0]))
+    opt = optimizers.SGD(learning_rate=0.1, momentum=0.9, nesterov=True)
+    trace = []
+    for _ in range(10):
+        set_grads(layer, w=layer.params["w"].copy())   # grad = x for 0.5 x^2
+        opt.update([layer])
+        trace.append(layer.params["w"][0])
+    # closed-form first two steps of standard NAG on x0=1, lr=0.1, mu=0.9
+    np.testing.assert_allclose(trace[0], 0.81)
+    np.testing.assert_allclose(trace[1], 0.5751)
+    # converges: the last iterate stays inside the initial ball
+    assert abs(trace[-1]) < 1.0

@@ -7,3 +7,6 @@
 *.so
 build/
 numpy_keras/cython/_kernels.c
+
+# Editable install (pip install -e .)
+*.egg-info/

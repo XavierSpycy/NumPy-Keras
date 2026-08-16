@@ -74,7 +74,7 @@ class SGD(Optimizer):
                         self.velocity_prev[key] = self.velocity[i][key]
                         self.velocity[i][key] = self.momentum * self.velocity_prev[key] - self.learning_rate * grad
                         # Update the parameters
-                        layer.params[key] -= -self.momentum * self.velocity_prev[key] - (1 + self.momentum) * self.velocity[i][key]
+                        layer.params[key] -= self.momentum * self.velocity_prev[key] - (1 + self.momentum) * self.velocity[i][key]
                     else:
                         # Update the velocity
                         self.velocity[i][key] = self.momentum * self.velocity[i][key] + self.learning_rate * grad

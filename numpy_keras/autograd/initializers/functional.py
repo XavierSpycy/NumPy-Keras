@@ -27,7 +27,7 @@ def xaiver_normal(shape: Tuple[int, int], gain: float = 1.0) -> np.ndarray:
     return gain * np.random.normal(loc=0.0, scale=np.sqrt(2 / (shape[0] + shape[1])), size=shape)
 
 def kaiming_uniform(shape: Tuple[int, int], mode: str = 'fan_in') -> np.ndarray:
-    return np.random.uniform(low=-np.sqrt(3/(shape[0] if mode == 'fan_in' else shape[1])), high=np.sqrt(3/(shape[0] if mode == 'fan_in' else shape[1])), size=shape)
+    return np.random.uniform(low=-np.sqrt(6/(shape[0] if mode == 'fan_in' else shape[1])), high=np.sqrt(6/(shape[0] if mode == 'fan_in' else shape[1])), size=shape)
 
 def kaiming_normal(shape: Tuple[int, int], mode: str = 'fan_in') -> np.ndarray:
-    return np.random.normal(loc=0.0, scale=np.sqrt(1/(shape[0] if mode == 'fan_in' else shape[1])), size=shape)
+    return np.random.normal(loc=0.0, scale=np.sqrt(2/(shape[0] if mode == 'fan_in' else shape[1])), size=shape)
