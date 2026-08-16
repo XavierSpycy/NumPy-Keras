@@ -5,7 +5,8 @@ from typing import (
     Tuple,
 )
 
-import numpy as np
+import numpy as _np  # host-only math (output_dim's prod of a shape tuple)
+from ..backend import xp as np, is_cupy_array
 
 from ..activations._mapper import _ActivationMapper
 from ..initializers._mapper import _InitializerMapper
@@ -173,6 +174,47 @@ class LSTM:
         N, T, _ = inputs.shape
         U = self.__units
 
+        if is_cupy_array(inputs):
+            # GPU path: batch the input projection over all timesteps into a
+            # single 3D matmul, so only the recurrence stays in the loop.
+            pre_x = inputs @ self.params["W_xh"]           # (N, T, 4U)
+            h = np.zeros((N, U))
+            c = np.zeros((N, U))
+            i_seq = np.empty((N, T, U))
+            f_seq = np.empty((N, T, U))
+            g_seq = np.empty((N, T, U))
+            o_seq = np.empty((N, T, U))
+            c_seq = np.empty((N, T, U))
+            h_seq = np.empty((N, T, U))
+            for t in range(T):
+                pre = pre_x[:, t, :] + h @ self.params["W_hh"]
+                if "b" in self.params:
+                    pre = pre + self.params["b"]
+                i = self.__activation_mapper[self.__recurrent_activation](
+                    pre[:, :U], **self.__recurrent_activation_config)
+                f = self.__activation_mapper[self.__recurrent_activation](
+                    pre[:, U:2 * U], **self.__recurrent_activation_config)
+                g = self.__activation_mapper[self.__activation](
+                    pre[:, 2 * U:3 * U], **self.__activation_config)
+                o = self.__activation_mapper[self.__recurrent_activation](
+                    pre[:, 3 * U:], **self.__recurrent_activation_config)
+                c = f * c + i * g
+                h = o * np.tanh(c)
+                i_seq[:, t, :] = i
+                f_seq[:, t, :] = f
+                g_seq[:, t, :] = g
+                o_seq[:, t, :] = o
+                c_seq[:, t, :] = c
+                h_seq[:, t, :] = h
+            self.inputs = inputs
+            self.__i_seq = i_seq
+            self.__f_seq = f_seq
+            self.__g_seq = g_seq
+            self.__o_seq = o_seq
+            self.__c_seq = c_seq
+            self.__h_seq = h_seq
+            return h_seq if self.__return_sequences else h
+
         h = np.zeros((N, U))
         c = np.zeros((N, U))
         # gate outputs and cell states per timestep, cached for backward
@@ -251,6 +293,35 @@ class LSTM:
         if "b" in self.grads:
             self.grads["b"] = np.zeros_like(self.params["b"])
 
+        if is_cupy_array(grad):
+            # GPU path: BPTT loops over the recurrence only; the W_xh
+            # accumulation and dX are batched into single ops afterwards.
+            d_pre_seq = np.empty((N, T, 4 * U))
+            dh = np.zeros((N, U))
+            dc = np.zeros((N, U))
+            for t in range(T - 1, -1, -1):
+                dh = dh + d_out[:, t, :]
+                tanh_c = np.tanh(self.__c_seq[:, t, :])
+                h_prev = np.zeros((N, U)) if t == 0 else self.__h_seq[:, t - 1, :]
+                c_prev = np.zeros((N, U)) if t == 0 else self.__c_seq[:, t - 1, :]
+                d_o = dh * tanh_c * self.__gate_deriv(self.__o_seq[:, t, :], **self.__recurrent_activation_config)
+                d_c = dh * self.__o_seq[:, t, :] * self.__cand_deriv(tanh_c, **self.__activation_config)
+                if t < T - 1:
+                    d_c = d_c + dc * self.__f_seq[:, t + 1, :]
+                d_i = d_c * self.__g_seq[:, t, :] * self.__gate_deriv(self.__i_seq[:, t, :], **self.__recurrent_activation_config)
+                d_f = d_c * c_prev * self.__gate_deriv(self.__f_seq[:, t, :], **self.__recurrent_activation_config)
+                d_g = d_c * self.__i_seq[:, t, :] * self.__cand_deriv(self.__g_seq[:, t, :], **self.__activation_config)
+                d_pre = np.concatenate([d_i, d_f, d_g, d_o], axis=1)   # (N, 4U)
+                d_pre_seq[:, t, :] = d_pre
+                self.grads["W_hh"] += h_prev.T @ d_pre
+                if "b" in self.grads:
+                    self.grads["b"] += d_pre.sum(axis=0)
+                dh = d_pre @ self.params["W_hh"].T
+                dc = d_c
+            # sum_t x_t^T d_pre_t in one reduction, and all dX rows at once
+            self.grads["W_xh"] = np.tensordot(self.inputs, d_pre_seq, axes=([0, 1], [0, 1]))
+            return d_pre_seq @ self.params["W_xh"].T
+
         dX = np.empty_like(self.inputs)
         dh = np.zeros((N, U))    # gradient through h_t from the future
         dc = np.zeros((N, U))    # gradient through c_t from the future
@@ -307,7 +378,7 @@ class LSTM:
 
     @property
     def output_dim(self):
-        return int(np.prod(self.__output_shape))
+        return int(_np.prod(self.__output_shape))
 
     @property
     def output_shape(self):

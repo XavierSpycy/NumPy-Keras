@@ -4,7 +4,7 @@ from typing import (
     Optional
 )
 
-import numpy as np
+from ..backend import xp as np
 
 from ..activations._mapper import _ActivationMapper
 

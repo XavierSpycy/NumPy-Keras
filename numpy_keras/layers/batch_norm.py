@@ -1,4 +1,4 @@
-import numpy as np
+from ..backend import xp as np
 
 from ..initializers._mapper import _InitializerMapper
 

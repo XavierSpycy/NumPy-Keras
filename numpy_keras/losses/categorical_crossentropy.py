@@ -1,4 +1,4 @@
-import numpy as np
+from ..backend import xp as np
 
 class CategoricalCrossEntropy:
     """Cross-entropy loss. ``grad`` returns the gradient with respect to

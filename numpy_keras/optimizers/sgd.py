@@ -1,6 +1,7 @@
 from typing import List
 
-import numpy as np
+from ..backend import xp as np, is_cupy_array, is_numpy_array
+from . import _gpu_kernels as _gk
 
 from ._base import Optimizer
 from ..cython import _kernels as _ck
@@ -52,8 +53,14 @@ class SGD(Optimizer):
         for i, layer in enumerate(layers):
             if hasattr(layer, 'params') and hasattr(layer, 'grads'):
                 for key in layer.params:
-                    # Optional Cython fast path: one fused pass per param array
+                    # Optional Cython fast path: one fused pass per param array.
+                    # The kernels are CPU-only, so device arrays take the pure
+                    # path; the type checks must come before any .flags access
+                    # (cupy arrays have no .flags attribute).
                     if (_ck is not None
+                            and is_numpy_array(layer.params[key])
+                            and is_numpy_array(layer.grads[key])
+                            and is_numpy_array(self.velocity[i][key])
                             and layer.params[key].dtype == np.float64
                             and layer.params[key].flags.c_contiguous
                             and layer.grads[key].flags.c_contiguous
@@ -63,6 +70,16 @@ class SGD(Optimizer):
                             self.velocity[i][key],
                             self.learning_rate, self.momentum,
                             self.weight_decay, int(self.nesterov))
+                        continue
+                    # Optional GPU fast path: one fused pass per param array
+                    # (the device twin of the Cython kernels above)
+                    if (is_cupy_array(layer.params[key])
+                            and layer.params[key].dtype in (np.float32, np.float64)):
+                        _gk.sgd_update(
+                            layer.params[key], layer.grads[key],
+                            self.velocity[i][key],
+                            self.learning_rate, self.momentum,
+                            self.weight_decay, self.nesterov)
                         continue
                     # Get the gradient
                     grad = layer.grads[key]

@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-import numpy as np
+from ..backend import xp as np, is_cupy_array
 
 from . import functional as F
 
@@ -56,6 +56,14 @@ class _ActivationMapper:
         if name == "softmax":
             y = output.reshape(-1, output.shape[-1])
             g = grad.reshape(-1, grad.shape[-1])
+            if is_cupy_array(output):
+                # contracted form y ⊙ (g - g·y) of the same
+                # Jacobian-vector product: mathematically identical
+                # (dz_i = y_i (g_i - Σ_j y_j g_j)), but it does not
+                # materialize the (n, C, C) Jacobian and avoids cupy's
+                # einsum overhead (which dominates at small batch sizes)
+                dz = y * (g - (g * y).sum(axis=1, keepdims=True))
+                return dz.reshape(grad.shape)
             J = y[:, :, None] * (np.eye(y.shape[-1])[None] - y[:, None, :])
             dz = np.einsum("nij,nj->ni", J, g)
             return dz.reshape(grad.shape)

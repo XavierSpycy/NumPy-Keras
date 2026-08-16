@@ -5,7 +5,8 @@ from typing import (
     Tuple,
 )
 
-import numpy as np
+import numpy as _np  # host-only math (output_dim's prod of a shape tuple)
+from ..backend import xp as np, is_cupy_array
 
 from ..activations._mapper import _ActivationMapper
 from ..initializers._mapper import _InitializerMapper
@@ -161,6 +162,22 @@ class SimpleRNN:
         N, T, _ = inputs.shape
         U = self.__units
 
+        if is_cupy_array(inputs):
+            # GPU path: batch the input projection over all timesteps into a
+            # single 3D matmul, so only the recurrence stays in the loop.
+            pre_x = inputs @ self.params["W_xh"]           # (N, T, U)
+            h = np.zeros((N, U))
+            h_seq = np.empty((N, T, U))
+            for t in range(T):
+                pre = pre_x[:, t, :] + h @ self.params["W_hh"]
+                if "b" in self.params:
+                    pre = pre + self.params["b"]
+                h = self.__activation_mapper[self.__activation](pre, **self.__activation_config)
+                h_seq[:, t, :] = h
+            self.inputs = inputs
+            self.__h_seq = h_seq
+            return h_seq if self.__return_sequences else h
+
         h = np.zeros((N, U))
         h_seq = np.empty((N, T, U))   # hidden states, cached for backward
         for t in range(T):
@@ -210,6 +227,24 @@ class SimpleRNN:
         if "b" in self.grads:
             self.grads["b"] = np.zeros_like(self.params["b"])
 
+        if is_cupy_array(grad):
+            # GPU path: BPTT loops over the recurrence only; the W_xh
+            # accumulation and dX are batched into single ops afterwards.
+            d_pre_seq = np.empty((N, T, U))
+            dh = np.zeros((N, U))
+            for t in range(T - 1, -1, -1):
+                dh = dh + d_out[:, t, :]
+                d_pre = dh * self.__own_activation_deriv(self.__h_seq[:, t, :], **self.__activation_config)
+                h_prev = np.zeros((N, U)) if t == 0 else self.__h_seq[:, t - 1, :]
+                self.grads["W_hh"] += h_prev.T @ d_pre
+                if "b" in self.grads:
+                    self.grads["b"] += d_pre.sum(axis=0)
+                d_pre_seq[:, t, :] = d_pre
+                dh = d_pre @ self.params["W_hh"].T
+            # sum_t x_t^T d_pre_t in one reduction, and all dX rows at once
+            self.grads["W_xh"] = np.tensordot(self.inputs, d_pre_seq, axes=([0, 1], [0, 1]))
+            return d_pre_seq @ self.params["W_xh"].T
+
         dX = np.empty_like(self.inputs)
         dh = np.zeros((N, U))          # gradient through h_t from the future
         for t in range(T - 1, -1, -1):
@@ -248,7 +283,7 @@ class SimpleRNN:
 
     @property
     def output_dim(self):
-        return int(np.prod(self.__output_shape))
+        return int(_np.prod(self.__output_shape))
 
     @property
     def output_shape(self):

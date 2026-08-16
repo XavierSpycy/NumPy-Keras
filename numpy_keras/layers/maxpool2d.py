@@ -4,7 +4,13 @@ from typing import (
     Union,
 )
 
-import numpy as np
+import numpy as _np  # host-only math (e.g. output_dim's prod of a shape tuple)
+from ..backend import (
+    xp as np,
+    is_numpy_array,
+    scatter_add,
+    sliding_window_view,
+)
 
 from ..cython import _kernels as _ck
 from .conv2d import _as_pair
@@ -109,14 +115,16 @@ class MaxPool2D:
         sh, sw = self.__stride
 
         # Optional Cython fast path: window max + argmax in C
-        if _ck is not None and hasattr(_ck, 'maxpool_forward') and inputs.dtype == np.float64:
+        if (_ck is not None and hasattr(_ck, 'maxpool_forward')
+                and is_numpy_array(inputs)
+                and inputs.dtype == np.float64):
             output, self.__amax = _ck.maxpool_forward(x_pad, ph, pw, sh, sw)
             self.inputs_padded = x_pad
             return output
 
         # sliding_window_view appends the window axes at the end; transpose
         # them next to the spatial axes so the windows live in (3, 4)
-        win = np.lib.stride_tricks.sliding_window_view(x_pad, (ph, pw), axis=(1, 2))[:, ::sh, ::sw]
+        win = sliding_window_view(x_pad, (ph, pw), axis=(1, 2))[:, ::sh, ::sw]
         win = win.transpose(0, 1, 2, 4, 5, 3)   # (N, OH, OW, ph, pw, C)
         N, OH, OW, _, _, C = win.shape
         output = np.max(win, axis=(3, 4))
@@ -146,7 +154,9 @@ class MaxPool2D:
         Hp, Wp = self.inputs_padded.shape[1], self.inputs_padded.shape[2]
 
         # Optional Cython fast path: scatter in C
-        if _ck is not None and hasattr(_ck, 'maxpool_backward') and grad.dtype == np.float64:
+        if (_ck is not None and hasattr(_ck, 'maxpool_backward')
+                and is_numpy_array(grad)
+                and grad.dtype == np.float64):
             grad_padded = np.zeros((N, Hp, Wp, C))
             _ck.maxpool_backward(grad, self.__amax, grad_padded, ph, pw, sh, sw)
         else:
@@ -155,7 +165,7 @@ class MaxPool2D:
                 np.arange(N), np.arange(OH), np.arange(OW), np.arange(C), indexing='ij')
             h_abs = i_idx * sh + self.__amax // pw
             w_abs = j_idx * sw + self.__amax % pw
-            np.add.at(
+            scatter_add(
                 grad_padded,
                 (n_idx.ravel(), h_abs.ravel(), w_abs.ravel(), c_idx.ravel()),
                 grad.ravel())
@@ -177,7 +187,7 @@ class MaxPool2D:
 
     @property
     def output_dim(self):
-        return int(np.prod(self.__output_shape))
+        return int(_np.prod(self.__output_shape))
 
     @property
     def output_shape(self):

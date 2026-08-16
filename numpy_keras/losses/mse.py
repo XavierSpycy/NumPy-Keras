@@ -1,4 +1,4 @@
-import numpy as np
+from ..backend import xp as np
 
 class MSE:
     def __init__(
