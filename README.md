@@ -7,7 +7,7 @@ English | [简体中文](README.zh-CN.md)
   <b>NumPy-Keras</b>
 </p>
 
-**NumPy-Keras**, originally named **NumPyMultilayerPerceptron**, is a library for implementing a multilayer perceptron (MLP) using `numpy`. Its purpose is to provide a simple and easy-to-understand implementation, aimed at facilitating learning and teaching.
+**NumPy-Keras**, originally named **NumPyMultilayerPerceptron**, is a deep learning library implemented purely with `numpy`, covering the classic architecture trilogy — multilayer perceptrons, convolutional networks and recurrent networks (SimpleRNN/LSTM/GRU). Its purpose is to provide a simple and easy-to-understand implementation, aimed at facilitating learning and teaching.
 
 <p align="center">
   <img src="figures/MLP.jpg">
@@ -26,7 +26,7 @@ English | [简体中文](README.zh-CN.md)
   - A progress bar (requires the `tqdm` library)
   - A training history plot (requires the `matplotlib` library)
   - Automatic differentiation (requires the `autograd` library)
-  - If you are only interested in the specifics of the multilayer perceptron implementation, you can use just the `numpy` library, with lazy imports and exception handling to avoid errors if the necessary libraries are missing. <u> **Again, emphasize**: You only need the `numpy` library to run this framework.</u>
+  - If you are only interested in the specifics of the implementations themselves, you can use just the `numpy` library, with lazy imports and exception handling to avoid errors if the necessary libraries are missing. <u> **Again, emphasize**: You only need the `numpy` library to run this framework.</u>
 
 ## Table of Contents
 - [0. Quick Start](#sparkles-0-quick-start)
@@ -75,13 +75,15 @@ conda create -n numpy_keras python=3.12 -y
 conda activate numpy_keras
 ```
 
-- Install dependencies.
+- Install the library itself (editable, so changes to the source take effect immediately):
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
-To avoid installing extra dependencies for additional features, we have commented out the non-`numpy` dependencies. If you need these features, you can uncomment the lines and rerun `pip3 install -r requirements.txt`.
+- Install any extra dependencies you need.
+
+To avoid installing extra dependencies for additional features, we have commented out the non-`numpy` dependencies in `requirements.txt`. If you need these features, you can uncomment the lines and rerun `pip install -r requirements.txt`.
 
 If you are using miniconda, you may also need to install dependencies for `Jupyter Notebook`.
 
@@ -89,12 +91,33 @@ If you are using miniconda, you may also need to install dependencies for `Jupyt
 pip3 install jupyter ipywidgets
 ```
 
-- Finally, you can learn how to use the library through the Jupyter Notebooks in the notebooks folder.
+- Finally, you can learn how to use the library through the [tutorial series](tutorials/00_quickstart.md) or the Jupyter Notebooks in the [notebooks](notebooks) folder.
+
+### 0.1 Tutorial Series
+A Chinese tutorial series in `tutorials/` builds the whole trilogy from scratch, one concept per article, each with complete runnable code and measured numbers:
+
+| # | 文章 | 主题 |
+|---|---|---|
+| 00 | 五分钟上手 | honest train/test split, first MNIST model |
+| 01 | 激活函数全解 | 17 activations, derivatives on post-activation values, vanishing gradients |
+| 02 | 损失函数 | MSE vs cross-entropy, the softmax+CE combined gradient |
+| 03 | 反向传播逐行拆解 | chain rule through `Sequential`, finite-difference gradient checking, autograd comparison |
+| 04 | 优化器进化史 | SGD → Momentum → NAG → Adagrad → Adadelta → Adam |
+| 05 | 学习率与九大调度器 | lr sweep, nine schedulers, ReduceLROnPlateau + EarlyStopping |
+| 06 | MLP 深入 | initializer scales and the 12-layer deep network |
+| 07 | Dropout | inverted dropout and the overfitting comparison |
+| 08 | BatchNormalization | train/inference modes and running statistics |
+| 09 | CNN 解剖 | im2col, LeNet and feature maps |
+| 10 | RNN 三部曲 | SimpleRNN/LSTM/GRU and BPTT |
+| 11 | 引擎室 (可选) | the duck-typed layer contract, adding a layer |
+| 12 | Cython 加速 (可选) | compiled kernels and benchmark methodology |
+
+Each article stands alone, and its code is byte-identical to `tutorials/code/*.py`; see [tutorials/README.md](tutorials/README.md) for the full index and the Zhihu/CSDN publishing checklist.
 
 ## :sparkles: 1. Introduction
 Multi-layer Perceptron (MLP) is one of the most basic neural network models. It consists of an input layer, one or more hidden layers, and an output layer. Each layer consists of multiple neurons, each with an activation function. An MLP is a feedforward neural network, and its output is calculated by forward propagation from the input layer to the output layer.
 
-The current mainstream deep learning frameworks, such as `TensorFlow`, `PyTorch`, etc., provide efficient implementations, but the underlying implementations are complex and difficult to understand. Therefore, to better understand the principles of deep learning, we provide an implementation of a multi-layer perceptron framework using `NumPy`.
+The current mainstream deep learning frameworks, such as `TensorFlow`, `PyTorch`, etc., provide efficient implementations, but the underlying implementations are complex and difficult to understand. Therefore, to better understand the principles of deep learning, we provide from-scratch `NumPy` implementations of the classic architectures — MLP, CNN and RNN (SimpleRNN/LSTM/GRU) — whose internals are written to read like a textbook.
 
 We mentioned `Keras` because our implementation was inspired by the `Keras` interface. From the interface perspective, `Keras` provides a high-level interface that allows users to easily build neural network models, making it very suitable for beginners because it is simple and easy to understand. For this reason, `TensorFlow` 2.0 and later versions also use `Keras` as their high-level interface.
 
@@ -125,10 +148,29 @@ model.evaluate(x_test, y_test)
 Meanwhile, we can see the following code example in our framework:
 
 ```python
+import csv
+import itertools
+
+import numpy as np
 import numpy_keras as keras
 
-X_train, y_train, X_test, y_test = mnist_load_data()
-X_train, X_test = X_train / 255.0, X_test / 255.0
+
+def load_mnist(path, n_rows=None):
+    """Load a label-first MNIST CSV: the first column is the label and the
+    remaining 784 columns are pixels (0-255)."""
+    with open(path) as f:
+        rows = list(itertools.islice(csv.reader(f), n_rows))
+    y = np.array([int(r[0]) for r in rows])
+    X = np.array([[float(v) for v in r[1:]] for r in rows]) / 255.0
+    return X, y
+
+
+# The training and test sets come from two different files.
+np.random.seed(0)
+X_train, y_train = load_mnist("data/mnist_train_small.csv", n_rows=5000)
+X_test, y_test = load_mnist("data/mnist_test.csv", n_rows=1000)
+X_train = X_train.reshape(-1, 28, 28)
+X_test = X_test.reshape(-1, 28, 28)
 
 model = keras.models.Sequential([
     keras.layers.Flatten(input_shape=(28, 28)),
@@ -144,9 +186,9 @@ model.compile(optimizer='adam',
 history = model.fit(X_train, y_train, epochs=5, verbose=1)
 print(f"Accuracy on the training set: {model.evaluate(X_train, y_train):.2%}")
 print(f"Accuracy on the test set: {model.evaluate(X_test, y_test):.2%}")
-# Outputs:
-# Accuracy on the training set: 98.52%
-# Accuracy on the test set: 98.52%
+# Outputs (np.random.seed(0), pure NumPy mode, Apple M2 Pro):
+# Accuracy on the training set: 96.72%
+# Accuracy on the test set: 93.30%
 ```
 
 We can notice that our framework is very similar to the `Keras` interface, which allows beginners to refer to a more mature framework and build and train neural network models by themselves.
@@ -167,7 +209,7 @@ In addition to the basic implementation, we also provide some additional feature
 To conclude, our framework is a lightweight framework that only depends on the `numpy` library and provides a simple and easy-to-understand implementation. We hope that this framework can help users better understand the principles of deep learning and better use deep learning frameworks.
 
 ## :sparkles: 2. Dependencies
-Due to the fact that we have not conducted extensive testing, we cannot guarantee that the library will work on specific versions of `Python` and `numpy`. However, we list our development environment for reference:
+A `pytest` suite in [tests](tests) covers the layers, losses, optimizers, callbacks and the CNN/RNN paths (`python -m pytest tests/ -q`, currently 241 tests). The library is developed and tested in the following environment:
 - Python 3.12.1
 - numpy 1.26.4
 
@@ -436,14 +478,14 @@ import numpy as np
 
 np.random.seed(42)
 
-X_train = np.load('data/train_data.npy')
-y_train = np.load('data/train_label.npy').squeeze()
+X_train = np.load('data/train_data.npy')[:10000]
+y_train = np.load('data/train_label.npy').squeeze()[:10000]
 X_test = np.load('data/test_data.npy')
 y_test = np.load('data/test_label.npy').squeeze()
 print(X_train.shape, y_train.shape, X_test.shape, y_test.shape)
 ```
 
-In general, our dataset contains 50,000 training samples and 10,000 test samples, with a feature dimension of 128.
+In general, our dataset contains 50,000 training samples and 10,000 test samples, with a feature dimension of 128. The example below trains on the first 10,000 training samples so that the whole experiment finishes within minutes on an ordinary laptop; remove the slices to train on all 50,000 (about 35-45 minutes with the full 60-epoch budget on the reference machine).
 
 #### 3.2.2 Build the Model
 Here, we use `numpy_keras` to build a multi-layer perceptron (MLP) model. We will use a model with 12 hidden layers. We will use the `ELU` activation function and use the `He` uniform initializer to initialize the weights. We will also use the `Dropout` layer to reduce overfitting.
@@ -476,12 +518,12 @@ In this section, we also provide the model architecture we used. The selected ar
 </p>
 
 #### 3.2.3 Compile the Model
-We use the `Adam` optimizer to compile our model, and use `SparseCategoricalCrossentropy` as the loss function, as well as `Accuracy` as the evaluation metric. Additionally, we will use the `EarlyStopping` and `ReduceLROnPlateau` callback functions to improve model performance.
+We use the `Adam` optimizer and the `SparseCategoricalCrossentropy` loss. We deliberately do not pass `metrics`: every metric triggers a full-data prediction at the end of each epoch, which on 50,000 samples costs almost as much as the training step itself. The callbacks therefore monitor `val_loss` (always recorded when validation data is given), and the final accuracies are computed once after training.
 
 ```python
-early_stop = keras.callbacks.EarlyStopping('val_accuracy', mode='max', patience=5, restore_best_weights=True)
-lr_scheduler = keras.callbacks.ReduceLROnPlateau('val_accuracy', mode='max', factor=0.5, patience=3, min_lr=1e-6)
-model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+early_stop = keras.callbacks.EarlyStopping('val_loss', mode='min', patience=5, restore_best_weights=True)
+lr_scheduler = keras.callbacks.ReduceLROnPlateau('val_loss', mode='min', factor=0.5, patience=3, min_lr=1e-6)
+model.compile(optimizer='adam', loss='sparse_categorical_crossentropy')
 ```
 
 #### 3.2.4 Train the Model
@@ -491,21 +533,18 @@ model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=
 history = model.fit(X_train, y_train, epochs=60, batch_size=128, verbose=1, callbacks=[early_stop, lr_scheduler], validation_split=0.1)
 ```
 
-- Performance
-    - Accuracy (Training Set): 62.14%
-    - Accuracy (Test Set): 55.35%
-- Early Stop Epoch: 33
+- Performance (10,000-sample subset, `np.random.seed(42)`, compiled kernels, Apple M2 Pro)
+    - Accuracy (Training Set): 59.75%
+    - Accuracy (Test Set): 45.71%
+- Early Stop Epoch: 46
 
 ##### Test Set as Validation Set
+
+You can also pass the test set itself as the validation data; the recipe is identical and the main difference is where early stopping lands:
 
 ```python
 history = model.fit(X_train, y_train, epochs=60, batch_size=128, verbose=1, callbacks=[early_stop, lr_scheduler], validation_data=(X_test, y_test))
 ```
-
-- Performance
-    - Accuracy (Training Set): 64.98%
-    - Accuracy (Test Set): 56.02%
-- Early Stop Epoch: 51
 
 #### 3.2.5 Visualize the Training History
 
@@ -637,8 +676,9 @@ import numpy as np
 from numpy_keras import Sequential
 from numpy_keras import layers
 
+np.random.seed(0)
 with open("data/mnist_train_small.csv") as f:
-    rows = list(csv.reader(f))
+    rows = list(csv.reader(f))[:2000]    # 2,000 of the 20,000 rows
 X = np.array([[float(v) for v in r[1:]] for r in rows]) / 255.0
 y = np.array([int(r[0]) for r in rows])
 X = X.reshape(-1, 28, 28, 1)             # (N, H, W, C)
@@ -656,7 +696,9 @@ model.compile(loss="sparse_categorical_crossentropy", optimizer="adam",
               metrics=["accuracy"])
 
 history = model.fit(X, y, batch_size=32, epochs=2, shuffle=True)
-# Accuracy on the training set: ~93% after 2 epochs on 2000 samples
+# Accuracy on the training set: 93.20% after 2 epochs on 2,000 samples
+# (np.random.seed(0), pure NumPy mode). On the first 1,000 rows of
+# data/mnist_test.csv the same model reaches 89.30%.
 ```
 
 The same images can be read row by row as a sequence — 28 timesteps of 28 pixels each:
@@ -746,3 +788,10 @@ Right here, we have implemented the optimizers commonly used by beginners to hel
         - **feat**: Provided more callback functions for better model performance optimization.
         - **feat**: Supplied the `autograd` functionality for automatic gradient calculation, avoiding manual calculation, and provided more activation functions.
         - **docs**: Completed the docstrings for all modules, enhancing the clarity and understanding of the entire codebase.
+  - v2.1.0
+    - 2026.08.15
+      - **feat**: Added the RNN layer family — `SimpleRNN`, `LSTM` and `GRU` with pure NumPy BPTT.
+      - **feat**: Added a Chinese tutorial series in `tutorials/` (quickstart, activations, losses, backprop, optimizers, learning rate, MLP, ...).
+      - **fix**: Corrected the He (kaiming) initializer scales and the SGD Nesterov update.
+      - **build**: Fixed package discovery in `pyproject.toml` and documented `pip install -e .`.
+      - **test**: Added initializer regression tests; the suite now has 241 tests.
