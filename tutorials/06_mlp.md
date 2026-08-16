@@ -2,7 +2,7 @@
 
 > **前置知识**：本系列《反向传播逐行拆解》与《学习率与九大调度器》
 > **运行环境**：numpy_keras v2.1.0 / Python 3.12 / NumPy 1.26.4（Apple M2 Pro 实测）
-> **运行时间**：约 7.5 分钟（实测 448.5 s，编译内核模式；纯 NumPy 模式轨迹一致、耗时约 1.5 倍，两路径由奇偶测试锁定）
+> **运行时间**：约 10 秒（编译内核，低负载实测；纯 NumPy 模式轨迹一致、耗时约 1.5 倍。两种模式都随机器负载显著变慢——本机高负载时曾测到 448.5 s）
 > **随机种子**：`np.random.seed(0)`（初始化器实验）+ `np.random.seed(42)`（深网训练）
 
 前面五篇拆完了零件，这一篇把它们装进一个真正的**深层** MLP 里。主角有两个：**初始化器**（决定深层网络能不能开始训练）和**参数量**（决定你能训多深）。
@@ -105,23 +105,22 @@ class EpochLogger:
 训练过程（节选关键转折，完整输出见文末）：
 
 ```text
-  epoch  1: val_loss=2.0779, lr=0.001000
-  epoch 25: val_loss=1.5446, lr=0.001000
-  epoch 26: val_loss=1.5537, lr=0.000500   ← 平台期触发第一次降 lr
-  epoch 33: val_loss=1.5401, lr=0.000250
-  epoch 39: val_loss=1.5273, lr=0.000125
-  epoch 44: val_loss=1.5232, lr=0.000063
-  epoch 46: val_loss=1.5220, lr=0.000063
-实际 epoch: 46（EarlyStopping 提前终止）
-训练集准确率（恢复最佳权重后，一次全量 predict）: 0.5975
-测试集准确率（恢复最佳权重后，一次全量 predict）: 0.4571
+  epoch  1: val_loss=2.0619, lr=0.001000
+  epoch 25: val_loss=1.5429, lr=0.001000
+  epoch 26: val_loss=1.5439, lr=0.000500   ← 平台期触发第一次降 lr
+  epoch 32: val_loss=1.5145, lr=0.000250
+  epoch 40: val_loss=1.5177, lr=0.000125
+  epoch 42: val_loss=1.5125, lr=0.000125
+实际 epoch: 42（EarlyStopping 提前终止）
+训练集准确率（恢复最佳权重后，一次全量 predict）: 0.5913
+测试集准确率（恢复最佳权重后，一次全量 predict）: 0.4579
 ```
 
 ![12 层深网的训练曲线](assets/06_deep_mlp_history.png)
 
-学习率从 1e-3 一路砍到 6.25e-5，每次砍半都换来一次小幅下降；早停在第 46 轮触发，`restore_best_weights` 把模型恢复到最佳验证点。
+学习率从 1e-3 一路砍到 1.25e-4，每次砍半都换来一次小幅下降；早停在第 42 轮触发，`restore_best_weights` 把模型恢复到最佳验证点。
 
-**如实解读这两个数字**：训练 59.75%、测试 45.71%。10 个类随机猜是 10%，45.71% 说明模型学到了东西；训练与测试之间 14 个百分点的差距，说明模型在记住训练集（过拟合）——10k 样本对 49,530 个参数的 12 层网络来说太薄。**这是本次实测数字能证明的全部**：至于去掉切片换成全量 50k 会得到什么数字，留给练习去实测，本篇不做未经测量的预测。
+**如实解读这两个数字**：训练 59.13%、测试 45.79%。10 个类随机猜是 10%，45.79% 说明模型学到了东西；训练与测试之间 13.3 个百分点的差距，说明模型在记住训练集（过拟合）——10k 样本对 49,530 个参数的 12 层网络来说太薄。**这是本次实测数字能证明的全部**：至于去掉切片换成全量 50k 会得到什么数字，留给练习去实测，本篇不做未经测量的预测。
 
 ## 4. 完整代码
 
@@ -337,59 +336,56 @@ dense_8              10                   170
 =================================================================
 Total params: 49,530
 _________________________________________________________________
-  epoch  1: val_loss=2.0779, lr=0.001000
-  epoch  2: val_loss=1.9539, lr=0.001000
-  epoch  3: val_loss=1.8618, lr=0.001000
-  epoch  4: val_loss=1.8015, lr=0.001000
-  epoch  5: val_loss=1.7741, lr=0.001000
-  epoch  6: val_loss=1.7298, lr=0.001000
-  epoch  7: val_loss=1.7006, lr=0.001000
-  epoch  8: val_loss=1.6839, lr=0.001000
-  epoch  9: val_loss=1.6571, lr=0.001000
-  epoch 10: val_loss=1.6616, lr=0.001000
-  epoch 11: val_loss=1.6443, lr=0.001000
-  epoch 12: val_loss=1.6150, lr=0.001000
-  epoch 13: val_loss=1.5969, lr=0.001000
-  epoch 14: val_loss=1.5918, lr=0.001000
-  epoch 15: val_loss=1.5823, lr=0.001000
-  epoch 16: val_loss=1.5796, lr=0.001000
-  epoch 17: val_loss=1.5682, lr=0.001000
-  epoch 18: val_loss=1.5843, lr=0.001000
-  epoch 19: val_loss=1.5734, lr=0.001000
-  epoch 20: val_loss=1.5611, lr=0.001000
-  epoch 21: val_loss=1.5539, lr=0.001000
-  epoch 22: val_loss=1.5439, lr=0.001000
-  epoch 23: val_loss=1.5406, lr=0.001000
-  epoch 24: val_loss=1.5527, lr=0.001000
-  epoch 25: val_loss=1.5446, lr=0.001000
-  epoch 26: val_loss=1.5537, lr=0.000500
-  epoch 27: val_loss=1.5332, lr=0.000500
-  epoch 28: val_loss=1.5299, lr=0.000500
-  epoch 29: val_loss=1.5291, lr=0.000500
-  epoch 30: val_loss=1.5252, lr=0.000500
-  epoch 31: val_loss=1.5312, lr=0.000500
-  epoch 32: val_loss=1.5281, lr=0.000500
-  epoch 33: val_loss=1.5401, lr=0.000250
-  epoch 34: val_loss=1.5288, lr=0.000250
-  epoch 35: val_loss=1.5242, lr=0.000250
-  epoch 36: val_loss=1.5210, lr=0.000250
-  epoch 37: val_loss=1.5217, lr=0.000250
-  epoch 38: val_loss=1.5280, lr=0.000250
-  epoch 39: val_loss=1.5273, lr=0.000125
-  epoch 40: val_loss=1.5254, lr=0.000125
-  epoch 41: val_loss=1.5208, lr=0.000125
-  epoch 42: val_loss=1.5213, lr=0.000125
-  epoch 43: val_loss=1.5218, lr=0.000125
-  epoch 44: val_loss=1.5232, lr=0.000063
-  epoch 45: val_loss=1.5231, lr=0.000063
-  epoch 46: val_loss=1.5220, lr=0.000063
+  epoch  1: val_loss=2.0619, lr=0.001000
+  epoch  2: val_loss=1.9339, lr=0.001000
+  epoch  3: val_loss=1.8353, lr=0.001000
+  epoch  4: val_loss=1.7807, lr=0.001000
+  epoch  5: val_loss=1.7586, lr=0.001000
+  epoch  6: val_loss=1.7188, lr=0.001000
+  epoch  7: val_loss=1.6943, lr=0.001000
+  epoch  8: val_loss=1.6702, lr=0.001000
+  epoch  9: val_loss=1.6524, lr=0.001000
+  epoch 10: val_loss=1.6451, lr=0.001000
+  epoch 11: val_loss=1.6379, lr=0.001000
+  epoch 12: val_loss=1.5996, lr=0.001000
+  epoch 13: val_loss=1.5881, lr=0.001000
+  epoch 14: val_loss=1.5844, lr=0.001000
+  epoch 15: val_loss=1.5820, lr=0.001000
+  epoch 16: val_loss=1.5737, lr=0.001000
+  epoch 17: val_loss=1.5642, lr=0.001000
+  epoch 18: val_loss=1.5728, lr=0.001000
+  epoch 19: val_loss=1.5689, lr=0.001000
+  epoch 20: val_loss=1.5539, lr=0.001000
+  epoch 21: val_loss=1.5552, lr=0.001000
+  epoch 22: val_loss=1.5443, lr=0.001000
+  epoch 23: val_loss=1.5277, lr=0.001000
+  epoch 24: val_loss=1.5381, lr=0.001000
+  epoch 25: val_loss=1.5429, lr=0.001000
+  epoch 26: val_loss=1.5439, lr=0.000500
+  epoch 27: val_loss=1.5297, lr=0.000500
+  epoch 28: val_loss=1.5264, lr=0.000500
+  epoch 29: val_loss=1.5143, lr=0.000500
+  epoch 30: val_loss=1.5174, lr=0.000500
+  epoch 31: val_loss=1.5173, lr=0.000500
+  epoch 32: val_loss=1.5145, lr=0.000250
+  epoch 33: val_loss=1.5158, lr=0.000250
+  epoch 34: val_loss=1.5107, lr=0.000250
+  epoch 35: val_loss=1.5081, lr=0.000250
+  epoch 36: val_loss=1.5080, lr=0.000250
+  epoch 37: val_loss=1.5076, lr=0.000250
+  epoch 38: val_loss=1.5140, lr=0.000250
+  epoch 39: val_loss=1.5149, lr=0.000250
+  epoch 40: val_loss=1.5177, lr=0.000125
+  epoch 41: val_loss=1.5136, lr=0.000125
+  epoch 42: val_loss=1.5125, lr=0.000125
 
-训练耗时: 448.5 s
-实际 epoch: 46（EarlyStopping 提前终止）
-最终学习率: 0.000063
-训练集准确率（恢复最佳权重后，一次全量 predict）: 0.5975
-测试集准确率（恢复最佳权重后，一次全量 predict）: 0.4571
+训练耗时: 10.7 s
+实际 epoch: 42（EarlyStopping 提前终止）
+最终学习率: 0.000125
+训练集准确率（恢复最佳权重后，一次全量 predict）: 0.5913
+测试集准确率（恢复最佳权重后，一次全量 predict）: 0.4579
 图片已保存: tutorials/assets/06_initializer_compare.png, tutorials/assets/06_deep_mlp_history.png
+
 ```
 
 ## 5. 小结
@@ -398,7 +394,7 @@ _________________________________________________________________
 - 初始化器的全部本质是**尺度**：glorot 为对称激活设计（√(2/(in+out))），he 为 ReLU 设计（√(2/in)，多出的 √2 补回被 ReLU 砍掉的信号）
 - 10 层实测：he_normal 信号存活（0.45），glorot 衰减（0.02），固定小尺度初始化五层内归零
 - 实战配方要点：val_loss 监控 + 不传 metrics（每轮全量 predict 是隐形大头）、5 行回调做逐轮日志、恢复最佳权重
-- 诚实面对数字：10k 样本上训练 59.75% / 测试 45.71%，14 个百分点的差距是过拟合的信号
+- 诚实面对数字：10k 样本上训练 59.13% / 测试 45.79%，13.3 个百分点的差距是过拟合的信号
 
 **练习**：把 10 层实验的激活换成 `tanh`，glorot 和 he 两条曲线会怎么对调？把深网实战的切片去掉（50k 全量，按测速约 35-45 分钟），测试准确率能到多少？
 

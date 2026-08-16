@@ -462,36 +462,25 @@ def test_rnn_summary_prints_sequence_shapes(capsys):
 
 
 # ---------------------------------------------------------------------------
-# The generic activation-derivative chain
+# Output-chain ownership
 # ---------------------------------------------------------------------------
 
-def test_simple_rnn_backward_applies_previous_activation_deriv():
-    """SimpleRNN participates in the generic chain like Dense: the returned
-    dX is multiplied by the previous layer's activation deriv at its input."""
-    layer = make_rnn(layers.SimpleRNN)
-    randomize_rnn(layer, seed=18)
-    X = np.random.RandomState(19).randn(4, 5, 3)
-    layer.forward(X, is_training=True)
-    grad = np.random.RandomState(20).randn(4, 4)
-    plain = layer.backward(grad)
-    layer.set_activation_deriv("tanh", {})
-    chained = layer.backward(grad)
-    np.testing.assert_allclose(chained, plain * F.tanh_deriv(X), rtol=1e-12, atol=1e-12)
-
-
 @pytest.mark.parametrize("layer_cls", [layers.SimpleRNN, layers.LSTM, layers.GRU])
-def test_rnn_layers_reset_the_chain_for_the_next_layer(layer_cls):
-    """RNN layers own their output chain (it runs inside backward, since
-    the hidden state also feeds the recurrence), so the next layer must
-    not apply any deriv: their activation property is None."""
+def test_rnn_layers_own_their_output_chain(layer_cls):
+    """Every layer chains through its own activation; RNNs handle theirs
+    entirely inside backward (the hidden state also feeds the recurrence),
+    and keep activation=None as a plain introspection marker."""
     model = Sequential()
     model.add(layers.Input((5, 3)))
     model.add(layer_cls(4))
     model.add(layers.Dense(1, activation="linear"))
-    dense = model.layers["dense_1"]
     rnn = next(layer for layer in model.layers.values() if isinstance(layer, layer_cls))
     assert rnn.activation is None
-    assert dense._Dense__activation_deriv is None
+    # the whole model trains end-to-end without error
+    X = np.random.RandomState(0).randn(8, 5, 3)
+    y = np.random.RandomState(1).randn(8, 1)
+    model.compile(loss="mse", optimizer="sgd")
+    model.fit(X, y, epochs=1, batch_size=4, verbose=0)
 
 
 # ---------------------------------------------------------------------------

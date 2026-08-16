@@ -5,10 +5,10 @@
     python tutorials/code/02_losses.py
 
 说明：
-- 第一部分验证 softmax+CE 的"合体梯度"：CE 对 softmax 输出的梯度乘上
-  softmax 的雅可比矩阵，化简后就是 (y_hat - y)/N —— 这正是库里
-  CategoricalCrossEntropy.grad 直接返回的值，也是 softmax 没有
-  独立导数的原因
+- 第一部分验证 softmax+CE 的"合体梯度"：CE 对 softmax 输出的原始梯度
+  乘上 softmax 的雅可比矩阵，化简后就是 (y_hat - y)/N —— 库里由
+  softmax 层在自己的 backward 里做这个雅可比乘积（CE 只返回对 ŷ 的
+  原始梯度），所以 softmax 不需要独立的逐元素导数
 - 第二部分在同一个二分类玩具数据上训练两个同样的单神经元模型，
   一个用 MSE、一个用稀疏交叉熵，对比收敛速度与最终准确率
 - 固定种子 np.random.seed(0)，数字可复现
@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 import numpy_keras as keras
 from numpy_keras.activations import functional as F
+from numpy_keras.activations._mapper import _ActivationMapper
 
 ASSETS = ROOT / "tutorials" / "assets"
 ASSETS.mkdir(parents=True, exist_ok=True)
@@ -58,11 +59,12 @@ grad_wrt_yhat = -y / np.clip(y_hat, 1e-10, 1 - 1e-10) / y.shape[0]
 J = y_hat[:, :, None] * (np.eye(3)[None, :, :] - y_hat[:, None, :])
 # 链式法则: ∂L/∂z = (∂L/∂ŷ) @ J
 grad_by_chain = np.einsum("bi,bij->bj", grad_wrt_yhat, J)
-# 库直接返回的"合体"梯度
+# 库的两步走：CE 返回对 ŷ 的原始梯度，softmax 层在自己的 backward 里
+# 做雅可比乘积（每层自持激活导数的约定）
 ce = keras.losses.CategoricalCrossEntropy()
-grad_by_lib = ce.grad(y, y_hat)
+grad_by_lib = _ActivationMapper().backward("softmax", y_hat, ce.grad(y, y_hat), {})
 print(f"  链式法则手算 ∂L/∂z = {grad_by_chain[0]}")
-print(f"  库的 CategoricalCrossEntropy.grad = {grad_by_lib[0]}")
+print(f"  库（softmax 层 backward）∂L/∂z = {grad_by_lib[0]}")
 print(f"  两者一致: {np.allclose(grad_by_chain, grad_by_lib)}")
 
 # 3. 学习减速实验：MSE vs 交叉熵

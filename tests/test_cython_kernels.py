@@ -163,10 +163,12 @@ def test_dense_backward_matches_numpy(code, deriv):
     X = rng.randn(64, 5)
     W = rng.randn(5, 4)
     g = rng.randn(64, 4)
-    dW, db, grad_next = _kernels.dense_backward(X, g, W, code)
-    np.testing.assert_allclose(dW, X.T @ g, rtol=1e-12, atol=1e-12)
-    np.testing.assert_allclose(db, g.sum(axis=0), rtol=1e-12, atol=1e-12)
-    np.testing.assert_allclose(grad_next, (g @ W.T) * deriv(X), rtol=1e-12, atol=1e-12)
+    out = rng.randn(64, 4)        # the layer's cached post-activation output
+    dz = g * deriv(out)           # the kernel scales first: dz = grad ⊙ f'(out)
+    dW, db, grad_next = _kernels.dense_backward(X, out, g, W, code)
+    np.testing.assert_allclose(dW, X.T @ dz, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(db, dz.sum(axis=0), rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(grad_next, dz @ W.T, rtol=1e-12, atol=1e-12)
 
 
 @pytest.mark.parametrize("code", [-1, 0])
@@ -176,7 +178,8 @@ def test_dense_backward_no_deriv_multiply(code):
     X = rng.randn(10, 5)
     W = rng.randn(5, 4)
     g = rng.randn(10, 4)
-    dW, db, grad_next = _kernels.dense_backward(X, g, W, code)
+    out = rng.randn(10, 4)
+    dW, db, grad_next = _kernels.dense_backward(X, out, g, W, code)
     np.testing.assert_allclose(grad_next, g @ W.T, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(dW, X.T @ g, rtol=1e-12, atol=1e-12)
 
@@ -187,9 +190,10 @@ def test_dense_backward_strided_inputs():
     X = base[:, ::2]              # strided view
     W = rng.randn(5, 4)
     g = rng.randn(20, 4)
-    _, _, grad_next = _kernels.dense_backward(X, g, W, 3)
+    out = rng.randn(20, 4)
+    _, _, grad_next = _kernels.dense_backward(X, out, g, W, 3)
     np.testing.assert_allclose(
-        grad_next, (g @ W.T) * F.tanh_deriv(X), rtol=1e-12, atol=1e-12
+        grad_next, (g * F.tanh_deriv(out)) @ W.T, rtol=1e-12, atol=1e-12
     )
 
 

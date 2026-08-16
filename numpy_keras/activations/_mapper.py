@@ -1,5 +1,7 @@
 from functools import lru_cache
 
+import numpy as np
+
 from . import functional as F
 
 class _ActivationMapper:
@@ -33,3 +35,29 @@ class _ActivationMapper:
             return self._lookup(name)
         except KeyError:
             raise ValueError(f"Activation function {name} not found.")
+
+    def backward(
+            self,
+            name: str,
+            output: np.ndarray,
+            grad: np.ndarray,
+            config: dict,
+        ) -> np.ndarray:
+        """Chain a gradient through this activation: returns grad ⊙ f'(output).
+
+        Each layer owns its own activation, so backward is a local operation
+        evaluated on the layer's cached post-activation output.  softmax has
+        no elementwise derivative: its Jacobian J[i, j] = ŷ_i (δ_ij - ŷ_j) is
+        contracted with the gradient along the last (class) axis.  linear /
+        None pass the gradient through unchanged.
+        """
+        if name is None or name == "linear":
+            return grad
+        if name == "softmax":
+            y = output.reshape(-1, output.shape[-1])
+            g = grad.reshape(-1, grad.shape[-1])
+            J = y[:, :, None] * (np.eye(y.shape[-1])[None] - y[:, None, :])
+            dz = np.einsum("nij,nj->ni", J, g)
+            return dz.reshape(grad.shape)
+        deriv = self[name + "_deriv"]
+        return grad * deriv(output, **config)

@@ -29,28 +29,9 @@ class Activation:
         self.__activation = activation
         self.__activation_config = activation_config
 
-        self.__activation_deriv = None
-        self.__activation_derive_config = {}
         self.__activation_mapper = _ActivationMapper()
 
         self.__input_shape = None
-
-    def set_activation_deriv(
-            self, 
-            prev_layer_activation: str,
-            prev_layer_activation_config: Dict[str, Any]
-        ) -> None:
-        
-        """
-        Set the activation derivative function of the previous layer.
-
-        Parameters:
-        - prev_layer_activation (str): The activation function of the previous layer.
-        - prev_layer_activation_config (dict): The activation function configuration of the previous layer.
-        """
-
-        self.__activation_deriv = self.__activation_mapper[prev_layer_activation + '_deriv'] if prev_layer_activation else None
-        self.__activation_derive_config = prev_layer_activation_config
 
     def set_input_shape(
             self,
@@ -100,7 +81,9 @@ class Activation:
         return self.output
     
     def backward(self, grad):
-        return grad * self.__activation_deriv(self.inputs, **self.__activation_derive_config)
+        # own activation, evaluated on the cached post-activation output
+        return self.__activation_mapper.backward(
+            self.__activation, self.output, grad, self.__activation_config)
     
     @property
     def activation(self):

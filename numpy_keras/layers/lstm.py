@@ -30,11 +30,11 @@ class LSTM:
     information to store -- the mechanism that lets gradients flow through
     time without vanishing as fast as in a plain RNN.
 
-    Because h_t is NOT the elementwise activation of a single pre-activation
-    (it is o * tanh(c_t)), this layer does not participate in the model's
-    generic activation-derivative chain: the `activation` property returns
-    None and the whole output chain (o and tanh(c)) is handled inside
-    `backward`.  `activation` configures the cell candidate, and
+    Like every layer, it chains through its own activation inside
+    backward.  Because h_t is NOT the elementwise activation of a single
+    pre-activation (it is o * tanh(c_t)), the gate and candidate derivs
+    are applied per timestep inside backward and the `activation` property
+    reports None.  `activation` configures the cell candidate, and
     `recurrent_activation` the three sigmoid gates.
 
     Not implemented (teaching scope): initial_state, stateful mode,
@@ -92,8 +92,6 @@ class LSTM:
         self.__bias_initializer = bias_initializer
         self.__bias_initializer_config = bias_initializer_config
 
-        self.__activation_deriv = None
-        self.__activation_derive_config = {}
         self.__activation_mapper = _ActivationMapper()
         self.__initializer = _InitializerMapper()
 
@@ -110,23 +108,6 @@ class LSTM:
 
         self.__input_shape = None   # (T, F), set when the model is built
         self.__output_shape = None
-
-    def set_activation_deriv(
-            self,
-            prev_layer_activation: str,
-            prev_layer_activation_config: Dict[str, Any],
-        ) -> None:
-
-        """
-        Set the activation derivative function of the previous layer.
-
-        Parameters:
-        - prev_layer_activation (str): The activation function of the previous layer.
-        - prev_layer_activation_config (dict): The activation function configuration of the previous layer.
-        """
-
-        self.__activation_deriv = self.__activation_mapper[prev_layer_activation + '_deriv'] if prev_layer_activation else None
-        self.__activation_derive_config = prev_layer_activation_config
 
     def set_input_shape(
             self,
@@ -303,8 +284,6 @@ class LSTM:
             dh = d_pre @ self.params["W_hh"].T
             dc = d_c
 
-        if self.__activation_deriv:
-            dX *= self.__activation_deriv(self.inputs, **self.__activation_derive_config)
         return dX
 
     @property
@@ -313,11 +292,9 @@ class LSTM:
 
     @property
     def activation(self):
-        # Deliberately None: h_t = o * tanh(c_t) is not the elementwise
-        # activation of a single pre-activation, so the generic
-        # activation-derivative chain (applied by the NEXT layer or by the
-        # loss) must skip this layer.  The output chain is handled inside
-        # backward; this also resets the chain for layers after the LSTM.
+        # Plain introspection marker: h_t is not a single elementwise
+        # activation, so there is no name to report -- the gate and
+        # candidate derivs are applied per timestep inside backward.
         return None
 
     @property

@@ -534,9 +534,9 @@ history = model.fit(X_train, y_train, epochs=60, batch_size=128, verbose=1, call
 ```
 
 - Performance (10,000-sample subset, `np.random.seed(42)`, compiled kernels, Apple M2 Pro)
-    - Accuracy (Training Set): 59.75%
-    - Accuracy (Test Set): 45.71%
-- Early Stop Epoch: 46
+    - Accuracy (Training Set): 59.13%
+    - Accuracy (Test Set): 45.79%
+- Early Stop Epoch: 42
 
 ##### Test Set as Validation Set
 
@@ -662,7 +662,7 @@ you can seamlessly switch to the functionality of `autograd`.
     - Supports `activation` (the candidate, default `'tanh'`), `recurrent_activation` (the gates, default `'sigmoid'`), `return_sequences`, `use_bias`; parameters are `(F, 3U)`, `(U, 3U)` and `(3U,)`.
 
 > [!NOTE]
-> RNN layers own their output chain completely: their `activation` property returns `None` (even for SimpleRNN), and the activation derivative is applied inside `backward` at every timestep — the hidden state also feeds the recurrence, so the chain must run inside the layer anyway. The generic elementwise-derivative convention (the *next* layer applies it) only fits Dense/Conv2D/Activation. Also, a `return_sequences=True` RNN outputs `(N, T, U)`; a `Dense` after it needs a `Flatten` in between (the model raises a helpful error otherwise). The RNN layers are pure NumPy — no Cython kernels, since the per-timestep work is already BLAS matrix products (see §2.1).
+> Every layer chains through its *own* activation inside `backward` (evaluated on its cached post-activation output); the criterion only computes the loss and its raw gradient. For RNN layers, whose output is not a single elementwise activation, the gate and candidate derivatives are applied per timestep inside `backward`, and their `activation` property simply reports `None`. Also, a `return_sequences=True` RNN outputs `(N, T, U)`; a `Dense` after it needs a `Flatten` in between (the model raises a helpful error otherwise). The RNN layers are pure NumPy — no Cython kernels, since the per-timestep work is already BLAS matrix products (see §2.1).
 
 - **[Input](numpy_keras/layers/input.py)**:
     - **Definition**:
@@ -792,6 +792,7 @@ Right here, we have implemented the optimizers commonly used by beginners to hel
     - 2026.08.15
       - **feat**: Added the RNN layer family — `SimpleRNN`, `LSTM` and `GRU` with pure NumPy BPTT.
       - **feat**: Added a Chinese tutorial series in `tutorials/` (quickstart, activations, losses, backprop, optimizers, learning rate, MLP, ...).
+      - **refactor**: Each layer now chains through its own activation inside `backward` (the criterion only computes the loss and its raw gradient) — simpler semantics, and BN/Dropout/custom layers are correct by construction. The softmax layer handles its Jacobian itself.
       - **fix**: Corrected the He (kaiming) initializer scales and the SGD Nesterov update.
       - **build**: Fixed package discovery in `pyproject.toml` and documented `pip install -e .`.
-      - **test**: Added initializer regression tests; the suite now has 241 tests.
+      - **test**: Added initializer regression tests; the suite now has 244 tests.

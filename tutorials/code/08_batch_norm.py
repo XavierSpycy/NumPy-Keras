@@ -5,7 +5,7 @@
     python tutorials/code/08_batch_norm.py
 
 说明：
-- 同一个 8 层 MLP 用同一个高学习率（SGD lr=0.5）训练两遍：
+- 同一个 8 层 MLP 用同一个高学习率（SGD lr=0.7）训练两遍：
   一层不加 BN、一层在每层激活后加 BN，对比训练曲线
 - 训练结束后打印 BN 层的滑动均值/方差：训练模式用 batch 统计量，
   推理模式（evaluate/predict）用滑动统计量
@@ -58,7 +58,7 @@ def build(with_bn):
             m.add(keras.layers.BatchNormalization())
     m.add(keras.layers.Dense(2, activation="softmax"))
     m.compile(loss="sparse_categorical_crossentropy",
-              optimizer=keras.optimizers.SGD(learning_rate=0.5),
+              optimizer=keras.optimizers.SGD(learning_rate=0.7),
               metrics=["accuracy"])
     return m
 
@@ -67,8 +67,8 @@ histories = {}
 for name, with_bn in [("without BN", False), ("with BN", True)]:
     np.random.seed(0)                    # 同种子、同初始点
     m = build(with_bn)
-    # 无 BN 时高学习率会让前向激活爆炸（inf），relu 会发出 invalid 警告——
-    # 这正是发散本身的信号，压掉警告噪音，发散看 loss=nan 即可
+    # 无 BN 时高学习率让梯度爆炸、预测崩塌（损失停在高位、准确率钉死
+    # 随机水平）——压掉 relu 的 invalid 警告噪音
     with np.errstate(invalid="ignore"):
         h = m.fit(X, y, batch_size=64, epochs=200, verbose=0)
     histories[name] = h
@@ -78,7 +78,7 @@ for name, with_bn in [("without BN", False), ("with BN", True)]:
 fig, axes = plt.subplots(1, 2, figsize=(11, 4))
 for name in histories:
     axes[0].plot(histories[name]["loss"], label=name)
-axes[0].set_title("Loss (NaN 后曲线中断)")
+axes[0].set_title("Loss")
 axes[0].set_xlabel("Epoch")
 axes[0].legend()
 axes[0].grid(alpha=0.3)
