@@ -18,7 +18,6 @@ from .. import (
     metrics,
     optimizers,
 )
-from ..activations._mapper import _ActivationMapper
 from ..cython import _kernels as _ck
 
 class Sequential:
@@ -315,8 +314,6 @@ class Sequential:
 
         output_dim = None
         output_shape = None
-        prev_layer_activation = None
-        prev_layer_activation_config = {}
         for layer in self.layers.values():
             # 4D-aware layers (Conv2D, MaxPool2D, ...) need the full input
             # shape; the scalar output_dim is not enough for them.
@@ -324,12 +321,8 @@ class Sequential:
                 layer.set_input_shape(output_shape)
             if output_dim and hasattr(layer, 'init_params'):
                 layer.init_params(output_dim)
-            if hasattr(layer, 'set_activation_deriv'):
-                layer.set_activation_deriv(prev_layer_activation, prev_layer_activation_config)
             if hasattr(layer, 'set_output_dim'):
                 layer.set_output_dim(output_dim)
-            prev_layer_activation = layer.activation if hasattr(layer, 'activation') else prev_layer_activation
-            prev_layer_activation_config = layer.activation_config if hasattr(layer, 'activation_config') else prev_layer_activation_config
             output_dim = layer.output_dim
             output_shape = getattr(layer, 'output_shape', None)
     
@@ -343,24 +336,9 @@ class Sequential:
             y = y.reshape(-1, 1)   # view; the loss functions only read y
         loss = self.__loss_func(y, y_hat)
         grad = self.__loss_func.grad(y, y_hat)
-        # Chain through the activation of the last layer itself. Derivs are
-        # defined on the post-activation value, so evaluate at y_hat. For
-        # softmax the loss grad already includes the activation
-        # (d softmax+CE / d logits), and no softmax_deriv exists.
-        last_layer = next(reversed(self.layers.values()))
-        # RNN layers (SimpleRNN/LSTM/GRU) return activation=None: their
-        # output chain is handled inside backward (the hidden state also
-        # feeds the recurrence, so it must be), and the generic chain --
-        # which applies to Dense/Conv2D -- must skip them.
-        if hasattr(last_layer, 'activation') and last_layer.activation is not None:
-            try:
-                activation_deriv = _ActivationMapper()[last_layer.activation + '_deriv']
-            except ValueError:
-                activation_deriv = None
-            # linear_deriv is the constant 1; multiplying by it changes
-            # nothing (IEEE: x * 1 == x bit-exact)
-            if activation_deriv is not None and last_layer.activation != 'linear':
-                grad = grad * activation_deriv(y_hat, **last_layer.activation_config)
+        # Each layer chains through its own activation inside its backward,
+        # so the criterion only computes the loss and its gradient w.r.t.
+        # the network output.
         return loss, grad
 
     def __forward(

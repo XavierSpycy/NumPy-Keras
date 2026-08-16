@@ -280,43 +280,49 @@ def dense_forward(cnp.ndarray inputs, cnp.ndarray W, b, int act_code):
     return lin
 
 
-def dense_backward(cnp.ndarray inputs, cnp.ndarray grad, cnp.ndarray W, int deriv_code):
+def dense_backward(cnp.ndarray inputs, cnp.ndarray output, cnp.ndarray grad,
+                   cnp.ndarray W, int deriv_code):
     """Mirrors Dense.backward: (inputs.T @ grad, sum(grad, 0), grad @ W.T),
-    with the activation-derivative multiply fused into the last pass.
+    with the layer's own activation-derivative multiply fused into the
+    last pass.  The derivative is evaluated on ``output`` (the cached
+    post-activation values), like the pure path.
 
     deriv_code: -1/0 = no multiply (none / linear), 1=relu, 2=sigmoid,
     3=tanh.  ``db`` uses a plain sequential reduction (NumPy sums pairwise),
     so values agree to ~1 ulp -- parity tests use rtol=1e-12.
     """
-    if inputs.dtype != np.float64 or grad.dtype != np.float64 or W.dtype != np.float64:
-        raise ValueError("dense_backward requires float64 inputs, grad and W")
-    if inputs.ndim != 2 or grad.ndim != 2 or W.ndim != 2:
-        raise ValueError("dense_backward requires 2D inputs, grad and W")
-    cdef cnp.ndarray dW = np.dot(inputs.T, grad)
-    cdef cnp.ndarray db = np.zeros(W.shape[1], dtype=np.float64)
-    cdef cnp.ndarray grad_next = np.dot(grad, W.T)
-    cdef double[:, :] Xv = inputs
+    if (inputs.dtype != np.float64 or output.dtype != np.float64
+            or grad.dtype != np.float64 or W.dtype != np.float64):
+        raise ValueError("dense_backward requires float64 inputs, output, grad and W")
+    if inputs.ndim != 2 or output.ndim != 2 or grad.ndim != 2 or W.ndim != 2:
+        raise ValueError("dense_backward requires 2D inputs, output, grad and W")
+    cdef cnp.ndarray dz = grad.copy()          # will hold ∂L/∂z = grad ⊙ f'(output)
+    cdef double[:, :] Ov = output
     cdef double[:, :] Gv = grad
-    cdef double[:, :] gv = grad_next
-    cdef double[:] bv = db
-    cdef Py_ssize_t i, j, n = Gv.shape[0], k = Gv.shape[1], nx = Xv.shape[1]
-
-    for i in range(n):
-        for j in range(k):
-            bv[j] += Gv[i, j]
+    cdef double[:, :] zv = dz
+    cdef Py_ssize_t i, j, n = Gv.shape[0], k = Gv.shape[1]
 
     if deriv_code == 1:          # relu_deriv
         for i in range(n):
-            for j in range(nx):
-                gv[i, j] *= _relu_deriv(Xv[i, j])
+            for j in range(k):
+                zv[i, j] *= _relu_deriv(Ov[i, j])
     elif deriv_code == 2:        # sigmoid_deriv
         for i in range(n):
-            for j in range(nx):
-                gv[i, j] *= _sigmoid_deriv(Xv[i, j])
+            for j in range(k):
+                zv[i, j] *= _sigmoid_deriv(Ov[i, j])
     elif deriv_code == 3:        # tanh_deriv
         for i in range(n):
-            for j in range(nx):
-                gv[i, j] *= _tanh_deriv(Xv[i, j])
+            for j in range(k):
+                zv[i, j] *= _tanh_deriv(Ov[i, j])
+
+    # parameter gradients and grad_next all use the deriv-scaled dz
+    cdef cnp.ndarray dW = np.dot(inputs.T, dz)
+    cdef cnp.ndarray db = np.zeros(W.shape[1], dtype=np.float64)
+    cdef double[:] bv = db
+    for i in range(n):
+        for j in range(k):
+            bv[j] += zv[i, j]
+    cdef cnp.ndarray grad_next = np.dot(dz, W.T)
     return dW, db, grad_next
 
 

@@ -83,35 +83,18 @@ class Conv2D:
         self.__bias_initializer = bias_initializer
         self.__bias_initializer_config = bias_initializer_config or {}
 
-        self.__activation_deriv = None
-        self.__activation_deriv_code = -1
-        self.__activation_derive_config = {}
+        # Deriv code for the optional Cython fast path: the layer chains
+        # through ITS OWN activation (softmax has no elementwise deriv,
+        # so it always takes the pure path).
+        self.__activation_deriv_code = (
+            _DERIV_CODES.get((self.__activation or "") + "_deriv", -2)
+            if self.__activation not in (None, "linear") else -1)
         self.__activation_mapper = _ActivationMapper()
         self.__initializer = _InitializerMapper()
 
         self.__input_shape = None   # (H, W, C), set when the model is built
         self.__output_shape = None
         self.__pad = None           # ((top, bottom), (left, right))
-
-    def set_activation_deriv(
-            self,
-            prev_layer_activation: str,
-            prev_layer_activation_config: Dict[str, Any],
-        ) -> None:
-
-        """
-        Set the activation derivative function of the previous layer.
-
-        Parameters:
-        - prev_layer_activation (str): The activation function of the previous layer.
-        - prev_layer_activation_config (dict): The activation function configuration of the previous layer.
-        """
-
-        self.__activation_deriv = self.__activation_mapper[prev_layer_activation + '_deriv'] if prev_layer_activation else None
-        self.__activation_deriv_code = (
-            _DERIV_CODES.get(prev_layer_activation + '_deriv', -2)
-            if prev_layer_activation else -1)
-        self.__activation_derive_config = prev_layer_activation_config
 
     def set_input_shape(
             self,
@@ -217,7 +200,8 @@ class Conv2D:
             self.inputs = inputs
             self.inputs_padded = x_pad
             self.cols = cols
-            return lin.reshape(N, OH, OW, self.__filters)
+            self.output = lin.reshape(N, OH, OW, self.__filters)
+            return self.output
 
         lin_output = cols @ self.params["W"].reshape(kh * kw * C, self.__filters)
         if "b" in self.params:
@@ -228,7 +212,8 @@ class Conv2D:
         self.cols = cols
 
         output = self.__activation_mapper[self.activation](lin_output, **self.__activation_config)
-        return output.reshape(N, OH, OW, self.__filters)
+        self.output = output.reshape(N, OH, OW, self.__filters)
+        return self.output
 
     def backward(
             self,
@@ -252,18 +237,19 @@ class Conv2D:
         W_col = self.params["W"].reshape(kh * kw * C, F)
 
         # Optional Cython fast path: BLAS via dense_backward on the column
-        # matrices, col2im scatter in C.  The deriv multiply inside
-        # dense_backward sees the column values (replicated pixel values),
-        # which equals the pure path's multiply on the de-padded input.
+        # matrices, col2im scatter in C.  dense_backward evaluates the
+        # activation derivative on the post-activation output, exactly like
+        # the pure path below.
         if (_ck is not None
                 and hasattr(_ck, 'col2im')
                 and grad.dtype == np.float64
                 and self.inputs.dtype == np.float64
                 and self.params["W"].dtype == np.float64
-                and not self.__activation_derive_config
+                and not self.__activation_config
                 and self.__activation_deriv_code != -2):
             dW, db, grad_cols_next = _ck.dense_backward(
-                self.cols, grad_cols, W_col, self.__activation_deriv_code)
+                self.cols, self.output.reshape(-1, F), grad_cols, W_col,
+                self.__activation_deriv_code)
             self.grads["W"] = dW.reshape(kh, kw, C, F)
             if "b" in self.grads:
                 self.grads["b"] = db
@@ -273,14 +259,18 @@ class Conv2D:
             (ph_b, ph_a), (pw_b, pw_a) = self.__pad
             return grad_padded[:, ph_b:Hp - ph_a, pw_b:Wp - pw_a, :]
 
+        # own activation, evaluated on the cached post-activation output:
+        # dz = grad ⊙ f'(y); the parameter gradients use dz, and dX comes
+        # from the column matmul + col2im on dz
+        grad_cols = self.__activation_mapper.backward(
+            self.activation, self.output.reshape(-1, F), grad_cols,
+            self.__activation_config)
         self.grads["W"] = (self.cols.T @ grad_cols).reshape(kh, kw, C, F)
         if "b" in self.grads:
             self.grads["b"] = grad_cols.sum(axis=0)
 
         grad_next_cols = grad_cols @ W_col.T  # (N * OH * OW, kh * kw * C)
         grad_next = self.__col2im(grad_next_cols.reshape(N, OH, OW, kh, kw, C))
-        if self.__activation_deriv:
-            grad_next *= self.__activation_deriv(self.inputs, **self.__activation_derive_config)
         return grad_next
 
     def __col2im(

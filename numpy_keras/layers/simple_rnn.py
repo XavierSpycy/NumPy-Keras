@@ -25,12 +25,11 @@ class SimpleRNN:
     h_T; the loss gradient then reaches earlier timesteps solely through
     the recurrent path -- backpropagation through time (BPTT).
 
-    Like LSTM and GRU, this layer owns its output chain completely: the
-    `activation` property returns None and backward applies
-    activation_deriv at every timestep.  The hidden state feeds the next
-    timestep directly, so the chain must run inside the layer anyway; the
-    generic convention (the next layer applies the deriv) only fits layers
-    whose output is a plain elementwise function of a single pre-activation.
+    Like every layer, it chains through its own activation inside
+    backward.  Because h_t is not the elementwise activation of a single
+    pre-activation (the hidden state feeds the next timestep directly), the
+    activation deriv is applied per timestep inside backward and the
+    `activation` property reports None.
 
     Not implemented (teaching scope): initial_state, stateful mode,
     bidirectional, go_backwards, dropout.
@@ -82,8 +81,6 @@ class SimpleRNN:
         self.__bias_initializer = bias_initializer
         self.__bias_initializer_config = bias_initializer_config
 
-        self.__activation_deriv = None
-        self.__activation_derive_config = {}
         self.__activation_mapper = _ActivationMapper()
         self.__initializer = _InitializerMapper()
 
@@ -99,23 +96,6 @@ class SimpleRNN:
 
         self.__input_shape = None   # (T, F), set when the model is built
         self.__output_shape = None
-
-    def set_activation_deriv(
-            self,
-            prev_layer_activation: str,
-            prev_layer_activation_config: Dict[str, Any],
-        ) -> None:
-
-        """
-        Set the activation derivative function of the previous layer.
-
-        Parameters:
-        - prev_layer_activation (str): The activation function of the previous layer.
-        - prev_layer_activation_config (dict): The activation function configuration of the previous layer.
-        """
-
-        self.__activation_deriv = self.__activation_mapper[prev_layer_activation + '_deriv'] if prev_layer_activation else None
-        self.__activation_derive_config = prev_layer_activation_config
 
     def set_input_shape(
             self,
@@ -245,8 +225,6 @@ class SimpleRNN:
             dX[:, t, :] = d_pre @ self.params["W_xh"].T
             dh = d_pre @ self.params["W_hh"].T
 
-        if self.__activation_deriv:
-            dX *= self.__activation_deriv(self.inputs, **self.__activation_derive_config)
         return dX
 
     @property
@@ -255,11 +233,9 @@ class SimpleRNN:
 
     @property
     def activation(self):
-        # Deliberately None, like LSTM/GRU: the output chain through this
-        # layer's own activation is applied inside backward (the hidden
-        # state also feeds the recurrence, so it must be), and the generic
-        # activation-derivative chain applied by the next layer must skip
-        # this layer.  This also resets the chain for layers after it.
+        # Plain introspection marker: h_t is not a single elementwise
+        # activation, so there is no name to report -- the activation
+        # deriv is applied per timestep inside backward.
         return None
 
     @property

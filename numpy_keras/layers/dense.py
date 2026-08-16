@@ -54,31 +54,14 @@ class Dense:
         self.__bias_initializer = bias_initializer
         self.__bias_initializer_config = bias_initializer_config
         
-        self.__activation_deriv = None
-        self.__activation_deriv_code = -1
-        self.__activation_derive_config = {}
+        # Deriv code for the optional Cython fast path: the layer chains
+        # through ITS OWN activation (softmax has no elementwise deriv,
+        # so it always takes the pure path).
+        self.__activation_deriv_code = (
+            _DERIV_CODES.get((self.__activation or "") + "_deriv", -2)
+            if self.__activation not in (None, "linear") else -1)
         self.__activation_mapper = _ActivationMapper()
         self.__initializer = _InitializerMapper()
-
-    def set_activation_deriv(
-            self, 
-            prev_layer_activation: str, 
-            prev_layer_activation_config: Dict[str, Any]
-        ) -> None:
-
-        """
-        Set the activation derivative function of the previous layer.
-
-        Parameters:
-        - prev_layer_activation (str): The activation function of the previous layer.
-        - prev_layer_activation_config (dict): The activation function configuration of the previous layer.
-        """
-
-        self.__activation_deriv = self.__activation_mapper[prev_layer_activation + '_deriv'] if prev_layer_activation else None
-        self.__activation_deriv_code = (
-            _DERIV_CODES.get(prev_layer_activation + '_deriv', -2)
-            if prev_layer_activation else -1)
-        self.__activation_derive_config = prev_layer_activation_config
     
     def set_input_shape(
             self,
@@ -167,23 +150,27 @@ class Dense:
                 and grad.dtype == np.float64
                 and self.inputs.ndim == 2
                 and self.inputs.dtype == np.float64
+                and self.output.ndim == 2
+                and self.output.dtype == np.float64
                 and self.params["W"].dtype == np.float64
-                and not self.__activation_derive_config
+                and not self.__activation_config
                 and self.__activation_deriv_code != -2):
             dW, db, grad_next = _ck.dense_backward(
-                self.inputs, grad, self.params["W"], self.__activation_deriv_code)
+                self.inputs, self.output, grad, self.params["W"],
+                self.__activation_deriv_code)
             self.grads["W"] = dW
             if "b" in self.grads:
                 self.grads["b"] = db
             return grad_next
 
+        # own activation, evaluated on the cached post-activation output:
+        # dz = grad ⊙ f'(y); the parameter gradients use dz, and dx = dz @ W.T
+        grad = self.__activation_mapper.backward(
+            self.__activation, self.output, grad, self.__activation_config)
         self.grads["W"] = np.dot(self.inputs.T, grad)
         if "b" in self.grads:
             self.grads["b"] = np.sum(grad, axis=0)
-        grad = np.dot(grad, self.params["W"].T)
-        if self.__activation_deriv:
-            grad *= self.__activation_deriv(self.inputs, **self.__activation_derive_config)
-        return grad
+        return np.dot(grad, self.params["W"].T)
     
     @property
     def units(self):
@@ -196,11 +183,7 @@ class Dense:
     @property
     def activation_config(self):
         return self.__activation_config
-    
-    @property
-    def activation_deriv(self):
-        return self.__activation_deriv
-    
+
     @property
     def output_dim(self):
         return self.__units
