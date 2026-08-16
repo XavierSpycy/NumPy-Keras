@@ -6,8 +6,8 @@
    ```python 代码块（忽略末尾换行差异）——读者整段复制即可运行。
 2. 首行为 `# excerpt: <目标>` 的代码块是节选：去掉该首行后，剩余内容
    必须作为连续子串（含缩进）出现在目标文件中。
-   <目标> 以 `numpy_keras/` 或 `tests/` 开头时指向仓库内该文件
-   （用于引用库源码片段）；其余情况指向本篇的 code 文件。
+   <目标> 以 `numpy_keras/`、`tests/` 开头或以 `.py` 结尾时指向
+   仓库内该文件（用于引用库源码片段）；其余情况指向本篇的 code 文件。
 
 用法：python tutorials/check_snippets.py [可选的文章编号前缀，如 00]
 退出码：0 = 全部通过；1 = 存在不一致或缺失。
@@ -28,7 +28,8 @@ def python_blocks(md_path: Path):
 
 
 def excerpt_source(target: str, code_path: Path, failures: list, block_no: int):
-    if target.startswith("numpy_keras/") or target.startswith("tests/"):
+    if (target.startswith("numpy_keras/") or target.startswith("tests/")
+            or target.endswith(".py")):
         source_path = REPO / target
         if not source_path.exists():
             failures.append(f"  block {block_no} (excerpt): 目标文件不存在: {target}")
