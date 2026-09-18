@@ -99,7 +99,7 @@ pip3 install jupyter ipywidgets
 ### 0.1 Tutorial Series
 A Chinese tutorial series in `tutorials/` builds the whole trilogy from scratch, one concept per article, each with complete runnable code and measured numbers:
 
-| # | 文章 | 主题 |
+| # | Articles (Chinese-only) | Topic |
 |---|---|---|
 | 00 | 五分钟上手 | honest train/test split, first MNIST model |
 | 01 | 激活函数全解 | 17 activations, derivatives on post-activation values, vanishing gradients |
@@ -116,7 +116,7 @@ A Chinese tutorial series in `tutorials/` builds the whole trilogy from scratch,
 | 12 | Cython 加速 (可选) | compiled kernels and benchmark methodology |
 | 13 | CuPy GPU 加速 (可选) | backend switch, host/device boundary, where the bottleneck moves |
 
-Each article stands alone, and its code is byte-identical to `tutorials/code/*.py`; see [tutorials/README.md](tutorials/README.md) for the full index and the Zhihu/CSDN publishing checklist.
+Each article stands alone, and its code is byte-identical to `tutorials/code/*.py`; see [tutorials/README.md](tutorials/README.md) for the full index and the publishing checklist.
 
 ## :sparkles: 1. Introduction
 Multi-layer Perceptron (MLP) is one of the most basic neural network models. It consists of an input layer, one or more hidden layers, and an output layer. Each layer consists of multiple neurons, each with an activation function. An MLP is a feedforward neural network, and its output is calculated by forward propagation from the input layer to the output layer.
