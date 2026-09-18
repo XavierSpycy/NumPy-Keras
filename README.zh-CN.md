@@ -116,7 +116,7 @@ pip3 install jupyter ipywidgets
 | 12 | Cython 加速 (可选) | 编译内核与基准方法学 |
 | 13 | CuPy GPU 加速 (可选) | 后端开关、主机/设备边界、瓶颈转移 |
 
-每篇文章独立成文, 其代码与 `tutorials/code/*.py` 逐字节一致; 完整索引与知乎/CSDN 发布清单见 [tutorials/README.md](tutorials/README.md)。
+每篇文章独立成文, 其代码与 `tutorials/code/*.py` 逐字节一致; 完整索引与发布清单见 [tutorials/README.md](tutorials/README.md)。
 
 ## :sparkles: 1. 引言
 多层感知机 (MLP) 是一种最基本的神经网络模型。它由一个输入层、一个或多个隐藏层和一个输出层组成。每一层都由多个神经元组成, 每个神经元都有一个激活函数。MLP 是一种前馈神经网络, 它的输出是由输入层到输出层的前向传播计算得到的。
